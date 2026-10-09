@@ -1,12 +1,12 @@
 // Gravador passivo + tuner do BO1 Zombies.app (DevTools em 127.0.0.1:9334). Nunca envia input nem recarrega.
-// node recorder.mjs <saida.jsonl> [horas]
+// node recorder.mjs <saida.jsonl> [horas] [porta]   (porta: 9335 para a segunda instância do teste de co-op)
 // Grava: {k:'f'} intervals de present (ms) por segundo, {k:'g'} GPU %, {k:'m'} memória do motor a cada 10 s,
 // {k:'i'} input do jogador ([t, tipo, a, b]... via _KB_Input), {k:'w'} linhas WEB_GPU/KISAK do console do site (lidas de five.console, sem assinar o console), {k:'s'} tela/mapa.
 // Tuner: a cada página nova, antes do jogador escolher o mapa, soma os comandos de live-commands.json
 // ({"*": [...], "<zone>": [...]}) aos de __kisakParity. Vale no próximo mapa que subir; nada muda na partida em curso.
 import { appendFileSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
-const [out, hours = '3'] = process.argv.slice(2);
+const [out, hours = '3', port = process.env.BO1Z_DEBUG_PORT ?? '9334'] = process.argv.slice(2);
 const LIVE = new URL('../live-commands.json', import.meta.url).pathname;
 const end = Date.now() + Number(hours) * 3600e3;
 const write = o => appendFileSync(out, JSON.stringify({ t: Date.now(), ...o }) + '\n');
@@ -27,7 +27,7 @@ const TUNE = extra => `(() => {
 })()`;
 
 async function session() {
-  const page = (await (await fetch('http://127.0.0.1:9334/json')).json()).find(t => t.type === 'page' && t.url.includes('vel.gg'));
+  const page = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find(t => t.type === 'page' && t.url.includes('vel.gg'));
   if (!page) return;
   const ws = new WebSocket(page.webSocketDebuggerUrl); let id = 0; const pending = new Map(); let closed = false;
   ws.onclose = () => { closed = true; };

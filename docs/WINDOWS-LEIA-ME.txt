@@ -1,0 +1,25 @@
+﻿BO1 Zombies — Windows (uso privado)
+====================================
+
+Jogar sozinho
+-------------
+1. Descompacte o zip numa pasta sua (ex.: Documentos\BO1 Zombies).
+2. Abra "BO1 Zombies.exe". O Windows SmartScreen vai reclamar (o app não é assinado):
+   "Mais informações" -> "Executar assim mesmo". Se preferir: botão direito no .exe -> Propriedades -> Desbloquear.
+3. Escolha o mapa. Na primeira vez o jogo baixa os arquivos do mapa do site (alguns GB); depois fica salvo em
+   %LOCALAPPDATA%\BO1 Zombies.
+
+Jogar junto (co-op)
+-------------------
+Antes, uma vez só: instale o Tailscale (https://tailscale.com/download) e entre na mesma rede Tailscale do Davi
+(ele te manda o convite). Se vocês estiverem na mesma casa, dá para pular o Tailscale e usar o IP da rede local.
+
+1. O Davi cria a sala no Mac e te passa o IP (100.x...) e o código de 5 letras.
+2. Dê dois cliques em "Entrar na sala.cmd", digite o IP e o código.
+3. No jogo, escolha o MESMO mapa que o Davi (Call of the Dead).
+
+Se der errado, mande para o Davi o arquivo %LOCALAPPDATA%\BO1 Zombies\logs\coop.log
+(cole esse caminho na barra de endereço do Explorador de Arquivos).
+
+O co-op ainda é experimental: a primeira rodada de testes é justamente para descobrir se o convidado consegue
+carregar o mapa pelo host.
