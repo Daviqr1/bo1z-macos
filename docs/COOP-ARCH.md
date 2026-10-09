@@ -46,8 +46,9 @@ transporte reapresenta (`join`) os convidados já conectados.
 
 ## 2. Protocolo de sinalização (app ⇄ signal/, WebSocket JSON, versão 1)
 
-URL: `wss://<host>/ws?v=1`. Toda mensagem é um objeto JSON com `t`. Tamanho máximo 16 KiB. O primeiro envio do
-cliente é obrigatoriamente `hello`.
+URL: `wss://<host>/ws?v=1` para criar; `wss://<host>/ws?v=1&room=<código>` para entrar e para voltar (resume), porque
+o Worker escolhe o Durable Object da sala no upgrade, antes do `hello`. Toda mensagem é um objeto JSON com `t`.
+Tamanho máximo 16 KiB. O primeiro envio do cliente é obrigatoriamente `hello`.
 
 Cliente → servidor:
 
@@ -66,14 +67,14 @@ Servidor → cliente:
 
 | `t` | campos |
 | --- | --- |
-| `welcome` | `room, you, role, hostId, peers:[{ id, name, role, ready }], lobby:{ map }, ice:[RTCIceServer], resume, invite` (`invite` = URL `https://<host>/j/<room>`) |
+| `welcome` | `room, you, role, hostId, peers:[{ id, name, role, ready }], lobby:{ map }, ice:[RTCIceServer], resume, invite, started` (`invite` = URL `https://<host>/j/<room>`; `peers` sem o próprio; `started` = `{ map, at }` se a partida já começou, senão `null`: quem entra ou volta no meio do jogo vai direto para o mapa) |
 | `peer-joined` | `peer:{ id, name, role, ready }` |
 | `peer-left` | `id, reason` |
 | `peer-ready` | `id, ready` |
 | `signal` | `from, data` |
 | `lobby` | `data:{ map }` |
 | `start` | `map, at` (epoch ms do servidor) |
-| `pong` | `ts` |
+| `pong` | `ts, now` (relógio do servidor) |
 | `error` | `code, message` — códigos: `version`, `room-not-found`, `room-full`, `bad-message`, `rate`, `forbidden`, `name` |
 | `closed` | `reason` (`host-left`, `kicked`, `expired`) |
 
@@ -133,9 +134,10 @@ a página do mapa (`https://vel.gg/bo1z/<slug>`) com início automático (`globa
 
 Canais (`ipcMain`/`ipcRenderer` via preload da janela net, `app/net/net-preload.js`):
 - main → net: `bo1z:net-cmd` com `{ cmd, args }` — `cmd` ∈ `create`, `join`, `leave`, `setMap`, `setReady`, `start`,
-  `config` (`{ signalUrl, name }`).
+  `kick`, `config` (`{ signalUrl, name }`). O main usa `app/net/net-window.js` (`createNetWindow`, `applyNetSwitches`).
 - net → main: `bo1z:net-state` com o `State` parcial (campos de §3 que a rede conhece: `phase`, `role`, `room`,
-  `invite`, `you`, `peers`, `signal`, `error`, `lobbyMap`, `startMap`).
+  `invite`, `you`, `peers`, `signal`, `error`, `lobbyMap`, `startMap`). `startMap` = `{ zone, at }`: o main navega para o
+  mapa quando o par muda (o host pode reiniciar no mesmo mapa). `starting`/`playing` é o main quem decide.
 - Port de pacotes: o main cria `MessageChannelMain` a cada página do jogo que pede (`bo1z:coop-hello`), manda um lado
   para a página (como hoje) e o outro para a janela net (`webContents.postMessage('bo1z:net-port', null, [port])`).
   A janela net fala o protocolo da §1 nesse port.
@@ -146,7 +148,10 @@ Canais (`ipcMain`/`ipcRenderer` via preload da janela net, `app/net/net-preload.
 - DataChannels negociados (`negotiated:true`): `game` (`id:0, ordered:false, maxRetransmits:0`) e `ctl`
   (`id:1`, confiável e ordenado; ping/pong a cada 1 s para RTT e detecção de queda).
 - `iceServers` do `welcome`. Trickle ICE via `signal`. ICE restart quando `iceConnectionState` fica `disconnected` por
-  mais de 3 s ou `failed`; se o `ctl` ficar 15 s sem pong, o par é dado como perdido (`link:'lost'`, `leave` no port).
+  mais de 3 s ou `failed`; se o `ctl` ficar 15 s sem pong, o par é dado como perdido (`link:'lost'`, `leave` com
+  `reason:'lost'` no port). A página do host guarda o ring desse convidado por 40 s (o `sv_timeout` do host é 30 s): se
+  o enlace volta (`join` com o mesmo id), o motor dele segue no mesmo slot do servidor. Saída de verdade (`left`,
+  `kicked`) libera o ring na hora.
 - `link`: tipo do par de candidatos selecionado em `getStats()` (`relay` se algum lado for `relay`, senão `direct`).
 - Congestionamento: se `game.bufferedAmount > 64 KiB`, descarta o pacote (semântica UDP).
 
