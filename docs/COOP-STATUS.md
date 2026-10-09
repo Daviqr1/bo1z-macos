@@ -1,7 +1,32 @@
 # Co-op P2P — estado em 2026-10-09 (sessão na nuvem)
 
-Complementa [`COOP-P2P-SPEC.md`](COOP-P2P-SPEC.md). Nada aqui foi testado com o jogo rodando (a nuvem não tem os
-packs nem GPU Apple); tudo o que depende do motor de verdade está marcado e tem script pronto para o Mac.
+Complementa [`COOP-P2P-SPEC.md`](COOP-P2P-SPEC.md) e [`COOP-ARCH.md`](COOP-ARCH.md) (arquitetura do produto: salas,
+convite por link, WebRTC, lobby).
+
+## 0. Atualização: testado com o motor de verdade
+
+O jogo roda nesta máquina da nuvem: Electron sem tela, WebGL2 por software, packs baixados do vel.gg só para teste
+local e nunca versionados. Com dois motores reais no Nacht der Untoten, **o convidado entra no jogo do host**:
+- aparece no mundo e no placar do host;
+- desenha o mundo do host;
+- o HUD mostra os pontos dos dois;
+- num teste de 4 minutos pelo lobby (modo por IP, `tools/coop-e2e.mjs`), ficou ativo do início ao fim, com ping
+  < 1 ms em localhost.
+
+O caminho até aqui derrubou várias hipóteses da análise estática e exigiu correções:
+
+| achado no motor rodando | correção |
+| --- | --- |
+| o cliente só aceita `connectResponse` e pacotes cuja porta de origem seja a do `localhost` resolvido (3074 em ordem de rede = 524), porque `NET_CompareBaseAdr` compara a porta | a ponte grava tag 524 no ring 0 do convidado |
+| reconectar pelo mesmo ring k com um motor novo leva `EXE_ERR_QPORT` (o slot antigo segue conectado; `sv_timeout` padrão é 240 s), e o cliente desiste | ring novo a cada `connect` com qport novo; `sv_timeout 30` no host |
+| convidado sem servidor local: `zombiemode` fica 0, então as tabelas de rede das entidades mudam (assert em `MSG_ReadDeltaEntityStruct`), e o `CL_DownloadsComplete` compila scripts de servidor MP que não existem no pack | **estratégia shadow**: o convidado sobe o mesmo mapa com servidor local e conecta em `localhost:3074` (não derruba o servidor local) |
+| com servidor local, os snapshots dele (porta 0, sequência alta) tomam o netchan do convidado, porque `CL_PacketEvent` usa `NET_CompareAdr`, que ignora a porta | **patch G1** no wasm do convidado (`app/coop/wasmpatch.mjs`, achado pela seção de nomes): `NET_CompareBaseAdr` no lugar |
+| o servidor local do convidado simularia um "jogador fantasma" (zumbis o matariam e a partida local acabaria) | a ponte pausa o servidor sombra (`sv_paused=1`) assim que o cliente passa a seguir o host |
+| a ponte não pode encaminhar o handshake do convidado com o próprio servidor local | a ponte só encaminha quando o `serverAddress` do cliente aponta para o host (o scanner acha o ponteiro da conexão) |
+
+Para latência, a ponte agora roda num Worker dedicado. Ela drena os rings a cada ~1 ms e injeta cada pacote
+assim que chega, sem o piso de ~4 ms dos timers da página.
+
 
 ## 1. Resumo
 
@@ -72,7 +97,7 @@ Comandos (nuvem ou Mac): `npm test` (29 testes, ~10 s), `npm run bench:race` (co
 - **Motor e página:** o motor roda numa pthread (`PROXY_TO_PTHREAD`), e a página é outra thread. A ponte roda na thread
   da página.
 
-### 3.2 Lado do convidado: **risco real** (pergunta 3)
+### 3.2 Lado do convidado (pergunta 3) — resolvido no motor rodando (ver §0); o texto abaixo é a análise original
 
 **Servidor local do frontend.** Sem `+devmap`, o `Com_Init` sobe sozinho um servidor local com o mapa `frontend`
 (`Com_LoadFrontEnd` → `map frontend`).
