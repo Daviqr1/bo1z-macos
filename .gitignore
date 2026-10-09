@@ -7,3 +7,5 @@ app/patches/packs/
 icon/src.*
 icon/sq.png
 dist/
+# worktrees temporárias das ferramentas de agente
+.claude/worktrees/
