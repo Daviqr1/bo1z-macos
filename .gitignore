@@ -1,0 +1,8 @@
+node_modules/
+# derivados de código de terceiros (vel.gg / Activision): gerados localmente, nunca versionados
+patches/KisakBlack-web.*.mjs
+app/patches/*.mjs
+patches/packs/
+app/patches/packs/
+icon/src.*
+icon/sq.png

@@ -1,0 +1,13 @@
+{
+  "KisakBlack-web.mjs": {
+    "original": "d067b08e922f098ee53985fb2bd60b92e46a6bfed6a3e6ec517fcb7105d60261",
+    "patched": "KisakBlack-web.patched.mjs",
+    "patches": [
+      "a",
+      "c",
+      "e",
+      "P01",
+      "I1"
+    ]
+  }
+}
