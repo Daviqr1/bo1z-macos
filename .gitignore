@@ -6,3 +6,4 @@ patches/packs/
 app/patches/packs/
 icon/src.*
 icon/sq.png
+dist/

@@ -3,6 +3,11 @@
 Público: agente de implementação (sessão na nuvem). Autor do pedido: Davi (dono do projeto). Data: 2026-10-09.
 Idioma do código/comentários: português, como o resto do app.
 
+> **Atualização 2026-10-09 (sessão na nuvem):** F0, F1, a fiação no app e o zip do Windows estão prontos. O transporte
+> v1 virou UDP direto entre os apps (rede de casa ou Tailscale) no lugar de Worker+WebRTC+TURN. A verificação estática
+> confirmou o lado do servidor e achou um risco no convidado (o cgame lê dados do servidor direto). Estado, resultados
+> e como testar no Mac: [`COOP-STATUS.md`](COOP-STATUS.md).
+
 ## 0. Objetivo
 
 Dois a quatro jogadores na mesma partida de zombies (começando por **Call of the Dead / `zombie_coast`**), um no Mac
@@ -60,6 +65,9 @@ Não há servidor de jogo central: o **host é o servidor autoritativo** (listen
 - `SV_ReadPackets` corrige `remoteAddress.port` a partir de `from.port` (string "SV_ReadPackets: fixing up a
   translated port"). `SV_DirectConnect` trata como **reconexão** quem casar `CompareBaseAdr` e (qport **ou** porta):
   um remoto com tag 0 colide com o cliente local do host.
+  *Correção (verificação de 2026-10-09):* `NET_CompareBaseAdr` **compara a porta** para loopback (tipos 0/2); só
+  `NET_CompareAdr` a ignora. Um convidado com tag `k ≠ 0` é outro endereço-base e ganha slot próprio; o tag entra em
+  `remoteAddress` já no `Netchan_Setup` (o "fixing up" quase não dispara para loopback). Ver COOP-STATUS §3.
 - `malloc`/`free` estão exportados; `engine.js` já usa `module._malloc` da página.
 - Build tem **1 cliente local só** (assert `localClientNum < 1`); splitscreen não serve.
 - Zombies decide solo/co-op **quando o mapa começa**: `getnumexpectedplayers` conta clientes conectados naquele
@@ -106,6 +114,8 @@ existente `emscripten_asm_const_int` com uma entrada nova em `ASM_CONSTS` (o app
 sha256 do `main.js` (entrada `KisakBlack-web.wasm` no `patches/manifest.json`). Só se o Plano A falhar.
 
 ### Transporte
+- *v1 implementada (2026-10-09):* UDP direto entre os processos principais dos apps (`app/coop/udp.js`), com código de
+  sala; rede de casa ou Tailscale (atravessa CGNAT sem TURN). O WebRTC abaixo fica para quando o Tailscale não servir.
 - **WebRTC DataChannel** `game`: `ordered:false, maxRetransmits:0` (semântica UDP; o netchan faz a confiabilidade).
   Datagrama ≤ **1264 B** (cabe no MTU do SCTP sem fragmentar). Canal `ctl` confiável para controle/ping (2 s).
 - Topologia em **estrela**: cada convidado ⇄ host. Convidado faz a offer. Timeout de abertura 8 s → cair para relay.
@@ -199,6 +209,9 @@ sha256 do `main.js` (entrada `KisakBlack-web.wasm` no `patches/manifest.json`). 
 - Commits: `feat|fix|docs|chore(escopo): descrição`, sem linhas de co-autoria.
 
 ## 8. Perguntas em aberto (responder com teste)
+
+Status em 2026-10-09 (1 e 4 favoráveis pela análise estática; 3 com risco alto): ver COOP-STATUS §7.
+
 1. O tag `k` em +1268 sobrevive até `remoteAddress.port` e o servidor responde no ring `k`? (estático diz que sim)
 2. Corrida de 2 produtores em `S.loopbacks[1]`: qual a taxa de corrupção observada? Precisa do Plano B?
 3. O convidado consegue subir sem servidor local e carregar o mapa via `connect localhost`?

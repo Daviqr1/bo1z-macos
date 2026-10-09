@@ -1,10 +1,14 @@
 {
   "name": "bo1z-app",
   "version": "1.0.0",
-  "description": "",
+  "description": "BO1 Zombies.app (Electron) para o port WebAssembly do vel.gg, com co-op P2P",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/*.test.mjs",
+    "bench:race": "node sim/bench-race.mjs",
+    "smoke": "node tools/coop-smoke.mjs",
+    "glue": "node patches/build-glue.mjs",
+    "package:win": "./scripts/package-windows.sh"
   },
   "keywords": [],
   "author": "",
