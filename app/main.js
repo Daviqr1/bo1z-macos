@@ -34,8 +34,8 @@ const DEFAULT_CONFIG = {
     '*': [], // todos os mapas
     zombie_coast: ['+set', 'r_fog', '0'], // Call of the Dead sem névoa
   },
-  // co-op (app/coop/main-coop.js): role "off" | "host" | "guest"; o convidado precisa de "host": "ip:porta" e "code"
-  coop: { role: 'off', port: 27960, host: '', code: '', name: '' },
+  // co-op (app/coop/): "signal" = servidor de convite (signal/README.md); "port" = porta UDP do modo "por IP"
+  coop: { signal: '', port: 27960 },
 };
 
 function mountGamesImage() {
@@ -65,7 +65,7 @@ function log(source, message) {
 mountGamesImage();
 app.setPath('userData', path.join(HOME, 'profile' + SUFFIX));
 const config = loadConfig();
-const coop = require('./coop/main-coop.js').setupCoop({ config, log, logDir: path.dirname(LOG_FILE), gameUrl: config.url });
+const coop = require('./coop/main-coop.js').setupCoop({ config, log, logDir: path.dirname(LOG_FILE), gameUrl: config.url, home: HOME });
 
 // Desempenho: GPU sem blocklist, nada de throttling quando a janela perde foco ou fica coberta.
 for (const flag of ['ignore-gpu-blocklist', 'disable-background-timer-throttling',
@@ -82,13 +82,30 @@ if (debugPort) {
   app.commandLine.appendSwitch('remote-debugging-port', String(debugPort));
 }
 
+// Links de convite: bo1z://join/<código>?s=<servidor> (e bo1z://ip/<endereço>/<código>). Mac: open-url; Windows/Linux:
+// o link chega no argv (da primeira instância ou repassado pela segunda, via second-instance).
+const pendingLinks = process.argv.filter(a => a.startsWith('bo1z://'));
+if (!process.env.BO1Z_HOME) { // BO1Z_HOME = teste: não registra o protocolo no sistema
+  if (process.defaultApp) app.setAsDefaultProtocolClient('bo1z', process.execPath, [path.resolve(process.argv[1] ?? '.')]);
+  else app.setAsDefaultProtocolClient('bo1z');
+}
+function openLink(url) {
+  if (!win) { pendingLinks.push(url); return; }
+  if (win.isMinimized()) win.restore();
+  win.focus();
+  coop.session.handleLink(url).then(ok => { if (ok && !/\/bo1z\/?$/.test(new URL(win.webContents.getURL() || config.url).pathname)) win.loadURL(config.url); })
+    .catch(error => log('link', error.message));
+}
+app.on('open-url', (event, url) => { event.preventDefault(); openLink(url); });
+
 if (!app.requestSingleInstanceLock()) app.quit();
 
 // Relido a cada página: mudanças no config.json valem ao entrar no próximo mapa, sem reiniciar o app.
 ipcMain.on('bo1z:config', event => {
   Object.assign(config, loadConfig());
+  const info = coop.preloadInfo(event.sender.getURL());
   event.returnValue = { commands: coop.withCoopCommands(config.commands), volume: config.volume, renderScale: config.renderScale,
-    muted: process.env.BO1Z_MUTE === '1', coop: coop.preloadInfo() };
+    muted: process.env.BO1Z_MUTE === '1', coop: info.coop, lobby: info.lobby, autostart: info.autostart };
 });
 
 ipcMain.on('bo1z:perf', (event, summary) => {
@@ -148,8 +165,8 @@ function installGluePatches() {
     }
     const isGlue = name === coop.glueName && request.url.includes('/artifacts/');
     const entry = config.patches && request.url.includes('/artifacts/') ? manifest[name] : null;
-    // Com sala ativa o glue sempre passa por aqui (o co-op precisa do patch N1, mesmo com patches: false).
-    if (!entry && !(isGlue && coop.active)) return net.fetch(request, { bypassCustomProtocolHandlers: true });
+    // O glue sempre passa por aqui: o co-op precisa do patch N1 (inerte sem sala), mesmo com patches: false.
+    if (!entry && !isGlue) return net.fetch(request, { bypassCustomProtocolHandlers: true });
     const original = await net.fetch(request, { bypassCustomProtocolHandlers: true });
     if (!original.ok) return original;
     const body = Buffer.from(await original.arrayBuffer());
@@ -212,14 +229,23 @@ Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: 'Menu de mapas', accelerator: 'CmdOrCtrl+M', click: () => win?.loadURL(config.url) },
     { role: 'reload' }, ...(IS_MAC ? [{ role: 'zoom' }] : []), { role: 'toggleDevTools' },
   ] },
-  ...(coop.active ? [{ label: 'Co-op', submenu: [
-    { label: coop.settings.role === 'host' ? 'Copiar convite' : `Convidado de ${coop.settings.host || '?'}`, enabled: coop.settings.role === 'host',
-      click: () => { const text = coop.copyInvite(); dialog.showMessageBox(win, { message: text ?? 'Sala ainda não abriu (veja o log do co-op).' }); } },
+  { label: 'Co-op', submenu: [
+    { label: 'Copiar convite', click: async () => { const text = await coop.copyInvite(); dialog.showMessageBox(win, { message: text ? `Convite copiado:\n${text}` : 'Nenhuma sala aberta. Use JOGAR COM AMIGOS na tela de mapas.' }); } },
+    { label: 'Sair da sala', click: () => coop.session.leave() },
     { label: 'Abrir log do co-op', click: () => shell.openPath(coop.logFile) },
-  ] }] : []),
+  ] },
 ]));
 
-app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
-app.whenReady().then(() => { installGluePatches(); createWindow(); });
+app.on('second-instance', (event, argv) => {
+  const link = argv.find(a => a.startsWith('bo1z://'));
+  if (link) openLink(link);
+  else if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+});
+// O host iniciou a partida (ou o convidado recebeu o início): a janela vai para a página do mapa.
+coop.session.on('navigate', ({ url }) => win?.loadURL(url));
+app.whenReady().then(() => {
+  installGluePatches(); createWindow(); coop.onReady();
+  for (const link of pendingLinks.splice(0)) openLink(link);
+});
 app.on('window-all-closed', () => app.quit());
 app.on('will-quit', () => coop.close());

@@ -15,7 +15,9 @@ export function connectQport(text) {
 
 const RESERVED_RINGS = 8; // 3 convidados + folga para quem cai e volta (cada ring custa ~40 KB do heap)
 
-export function startCoop({ role, port, layout, kb, log = console.log, intervalMs = 1, statsEveryMs = 10000 }) {
+// rings: ks já reservados (Worker: o malloc é feito na página). schedule: 'interval' (setInterval, piso de ~4 ms na
+// página) ou 'wait' (Atomics.waitAsync de 1 ms, para o Worker dedicado).
+export function startCoop({ role, port, layout, kb, log = console.log, intervalMs = 1, statsEveryMs = 10000, rings = null, schedule = 'interval' }) {
   const bridge = createNetBridge({ buffer: kb.memory.buffer, layout, malloc: kb.malloc, free: kb.free,
     log: (what, msg) => log(`${what} ${msg}`) });
   // Cada ring k é um endereço (porta k) para o servidor. O servidor guarda o slot de quem conectou por ele até o
@@ -29,7 +31,8 @@ export function startCoop({ role, port, layout, kb, log = console.log, intervalM
 
   if (role === 'host') {
     // Reserva já (N1 roda antes do main do motor): é quando o heap está baixo o bastante para k <= 0xffff.
-    for (let i = 0; i < RESERVED_RINGS; ++i) spare.push(bridge.openHostRing());
+    if (rings) for (const k of rings) spare.push(bridge.openHostRing(k));
+    else for (let i = 0; i < RESERVED_RINGS; ++i) spare.push(bridge.openHostRing());
     log(`rings reservados: ${spare.join(',')}`);
   }
   port.postMessage({ t: 'ready', role, rings: [...spare] });
@@ -116,7 +119,11 @@ export function startCoop({ role, port, layout, kb, log = console.log, intervalM
   }
 
   const stats = () => ({ role, armed, pausedShadow, traffic: { ...traffic }, peers: Object.fromEntries(peers), bridge: bridge.stats(), net });
-  const timer = setInterval(tick, intervalMs);
+  let timer = null, running = true;
+  if (schedule === 'wait') {
+    const sleeper = new Int32Array(new SharedArrayBuffer(4));
+    (async () => { while (running) { tick(); await Atomics.waitAsync(sleeper, 0, 0, intervalMs).value; } })();
+  } else timer = setInterval(tick, intervalMs);
   // Estatísticas no log só quando o tráfego muda (a cada statsEveryMs no máximo), para não encher o arquivo parado.
   let lastStats = '';
   const statsTimer = statsEveryMs ? setInterval(() => {
@@ -125,19 +132,48 @@ export function startCoop({ role, port, layout, kb, log = console.log, intervalM
   }, statsEveryMs) : null;
   return {
     bridge, stats, handshake, tick,
-    stop() { clearInterval(timer); if (statsTimer) clearInterval(statsTimer); port.onmessage = null; },
+    stop() { running = false; clearInterval(timer); if (statsTimer) clearInterval(statsTimer); port.onmessage = null; },
   };
 }
 
 // Ponto de entrada usado pelo preload: espera o motor (evento bo1z:kb do patch N1) e o port do main.
 // getLayout() só é chamado depois do evento: o main analisa o wasm quando ele passa pelo protocolo https.
-export async function boot({ role, portPromise, getLayout }) {
+// A ponte roda num Worker dedicado (bridge-worker.mjs); sem Worker, roda aqui mesmo (setInterval).
+export async function boot({ role, portPromise, getLayout, worker = true }) {
   const log = msg => console.log(`BO1Z_COOP ${msg}`);
   try {
     const kb = globalThis.__bo1zKB ?? await new Promise(resolve => addEventListener('bo1z:kb', () => resolve(globalThis.__bo1zKB), { once: true }));
     const [port, layout] = await Promise.all([portPromise, getLayout()]);
     if (!layout?.ok) throw new Error(`layout dos rings indisponível: ${layout?.reason ?? 'wasm não analisado'}`);
-    const coop = startCoop({ role, port, layout: layout.layout, kb, log });
+    let rings = null;
+    if (role === 'host') {
+      // malloc só na thread da página (Module); o Worker recebe os k prontos
+      const reserve = createNetBridge({ buffer: kb.memory.buffer, layout: layout.layout, malloc: kb.malloc, free: kb.free });
+      rings = Array.from({ length: RESERVED_RINGS }, () => reserve.openHostRing());
+    }
+    if (worker && typeof Worker === 'function') {
+      try {
+        const w = new Worker(new URL('./bridge-worker.mjs', import.meta.url), { type: 'module', name: 'bo1z-coop' });
+        let last = null;
+        const facade = { mode: 'worker', role, layout: layout.layout, worker: w, stats: () => last, handshake: [] };
+        await new Promise((resolve, reject) => {
+          w.onmessage = ({ data: m }) => {
+            if (m.t === 'log') { log(m.line); if (/^oob /.test(m.line)) { facade.handshake.push(m.line); if (facade.handshake.length > 200) facade.handshake.shift(); } }
+            else if (m.t === 'stats') last = m.stats;
+            else if (m.t === 'started') resolve();
+            else if (m.t === 'error') reject(new Error(m.message));
+          };
+          w.onerror = e => reject(new Error(e.message || 'erro no Worker'));
+          w.postMessage({ t: 'start', buffer: kb.memory.buffer, layout: layout.layout, role, rings, port }, [port]);
+        });
+        globalThis.__bo1zCoop = facade;
+        log(`ativo como ${role} (Worker)`);
+        return facade;
+      } catch (error) {
+        log(`Worker indisponível (${error.message}); ponte na página`);
+      }
+    }
+    const coop = startCoop({ role, port, layout: layout.layout, kb, log, rings });
     globalThis.__bo1zCoop = coop;
     log(`ativo como ${role}`);
     return coop;

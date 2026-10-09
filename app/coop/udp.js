@@ -9,12 +9,17 @@
 //   4 DATA    pacote cru do motor (≤ 1264 B)
 //   5 PING / 6 PONG: [t f64] (eco do relógio de quem mandou o PING)
 //   7 BYE
+//   8 CTL     JSON do lobby (≤ 1200 B): host -> convidados { t:'lobby', map, hostName } | { t:'start', map };
+//             convidado -> host { t:'ready', ready }
 'use strict';
 const dgram = require('node:dgram');
 const { EventEmitter } = require('node:events');
 
 const VERSION = 1;
-const T = { HELLO: 1, WELCOME: 2, REJECT: 3, DATA: 4, PING: 5, PONG: 6, BYE: 7 };
+const T = { HELLO: 1, WELCOME: 2, REJECT: 3, DATA: 4, PING: 5, PONG: 6, BYE: 7, CTL: 8 };
+const CTL_MAX = 1200;
+const encodeCtl = obj => { const b = Buffer.from(JSON.stringify(obj)); if (b.length > CTL_MAX) throw new RangeError('CTL grande demais'); return b; };
+const decodeCtl = body => { try { const o = JSON.parse(body.toString('utf8')); return o && typeof o === 'object' && typeof o.t === 'string' ? o : null; } catch { return null; } };
 const MAX_PAYLOAD = 1264;
 const PEER_TIMEOUT_MS = 10000;
 // Quem erra o código 5 vezes em 1 min fica 10 min ignorado (o código tem só 5 letras; um pacote que entra vai direto
@@ -74,6 +79,7 @@ class CoopHost extends EventEmitter {
       const reject = reason => { ++this.counters.rejected; this.sock.send(frame(T.REJECT, Buffer.from(reason)), rinfo.port, rinfo.address); };
       if (version !== VERSION) return reject(`versão ${version} != ${VERSION}`);
       if (this.code && code !== this.code) { this.strike(rinfo.address); return reject('código da sala errado'); }
+      let fresh = false;
       if (!peer) {
         if (this.peers.size >= this.maxGuests) return reject('sala cheia');
         const used = new Set([...this.peers.values()].map(p => p.slot));
@@ -81,11 +87,15 @@ class CoopHost extends EventEmitter {
         peer = { id: this.nextId++, slot, name, address: rinfo.address, port: rinfo.port, last: this.now(), rtt: null };
         this.peers.set(key, peer);
         this.byId.set(peer.id, peer);
-        this.log('coop', `entrou: ${name || '?'} (${key}) slot ${slot}`);
-        this.emit('join', peer.id, { name, slot, address: key });
+        fresh = true;
       }
       peer.last = this.now();
+      // WELCOME antes do 'join': o que o host mandar no 'join' (lobby) chega depois do WELCOME no convidado
       this.sock.send(frame(T.WELCOME, Buffer.from([VERSION, peer.slot])), rinfo.port, rinfo.address);
+      if (fresh) {
+        this.log('coop', `entrou: ${name || '?'} (${key}) slot ${peer.slot}`);
+        this.emit('join', peer.id, { name, slot: peer.slot, address: key });
+      }
       return;
     }
     if (!peer) return; // DATA/PING de quem não fez HELLO: ignora
@@ -98,7 +108,17 @@ class CoopHost extends EventEmitter {
       this.sock.send(frame(T.PONG, m.body.subarray(0, 8)), rinfo.port, rinfo.address);
     } else if (m.type === T.PONG && m.body.length >= 8) {
       peer.rtt = this.now() - m.body.readDoubleLE(0);
+    } else if (m.type === T.CTL && m.body.length <= CTL_MAX) {
+      const o = decodeCtl(m.body);
+      if (o) this.emit('ctl', peer.id, o);
     } else if (m.type === T.BYE) this.drop(key, 'saiu');
+  }
+
+  // Mensagem de lobby para um convidado (id) ou todos (id omitido).
+  sendCtl(obj, id) {
+    const body = frame(T.CTL, encodeCtl(obj));
+    for (const peer of id === undefined ? this.byId.values() : [this.byId.get(id)].filter(Boolean))
+      try { this.sock.send(body, peer.port, peer.address); } catch (error) { this.log('udp', error.message); }
   }
 
   send(id, bytes) {
@@ -169,6 +189,9 @@ class CoopGuest extends EventEmitter {
         this.sock.send(frame(T.PONG, m.body.subarray(0, 8)), this.target.port, this.target.address);
       } else if (m.type === T.PONG && m.body.length >= 8) {
         this.rtt = this.now() - m.body.readDoubleLE(0);
+      } else if (m.type === T.CTL && m.body.length <= CTL_MAX) {
+        const o = decodeCtl(m.body);
+        if (o) this.emit('ctl', o);
       } else if (m.type === T.BYE) {
         this.welcomed = false;
         this.emit('lost', 'host saiu');
@@ -197,6 +220,12 @@ class CoopGuest extends EventEmitter {
     return true;
   }
 
+  sendCtl(obj) {
+    if (!this.welcomed) return false;
+    try { this.sock.send(frame(T.CTL, encodeCtl(obj)), this.target.port, this.target.address); return true; }
+    catch (error) { this.log('udp', error.message); return false; }
+  }
+
   stats() {
     return { role: 'guest', host: `${this.target.address}:${this.target.port}`, welcomed: this.welcomed, slot: this.slot,
       rtt: this.rtt && +this.rtt.toFixed(1), ...this.counters };
@@ -207,6 +236,18 @@ class CoopGuest extends EventEmitter {
     try { if (this.welcomed) this.sock.send(frame(T.BYE), this.target.port, this.target.address); } catch {}
     setTimeout(() => { try { this.sock?.close(); } catch {} }, 50);
   }
+}
+
+// Endereços para o convite do modo por IP: Tailscale (100.64.0.0/10) primeiro, depois IPv4 da rede local.
+function inviteAddresses(port) {
+  const out = [];
+  for (const list of Object.values(require('node:os').networkInterfaces())) for (const a of list ?? []) {
+    if (a.family !== 'IPv4' || a.internal) continue;
+    const [x, y] = a.address.split('.').map(Number);
+    out.push({ address: a.address, tailscale: x === 100 && y >= 64 && y < 128 });
+  }
+  out.sort((a, b) => b.tailscale - a.tailscale);
+  return out.map(a => `${a.address}:${port}${a.tailscale ? ' (Tailscale)' : ''}`);
 }
 
 // Liga um transporte (CoopHost/CoopGuest) ao MessagePort da página (page.mjs). listen(handler) registra o handler de
@@ -241,4 +282,4 @@ function roomCode(random = require('node:crypto').randomInt) {
   return Array.from({ length: 5 }, () => alphabet[random(alphabet.length)]).join('');
 }
 
-module.exports = { CoopHost, CoopGuest, bindPage, roomCode, splitAddress, VERSION, MAX_PAYLOAD };
+module.exports = { CoopHost, CoopGuest, bindPage, roomCode, splitAddress, inviteAddresses, VERSION, MAX_PAYLOAD };

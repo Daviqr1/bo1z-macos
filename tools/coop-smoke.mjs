@@ -48,8 +48,12 @@ async function page(port) {
   throw new Error(`DevTools ${port} não respondeu`);
 }
 
+// Motor falso: memória compartilhada com o mesmo layout do motor real. No convidado, a "conexão do cliente" já aponta
+// para o host (serverAddress tipo 2, porta 524), que é quando a ponte do convidado passa a encaminhar.
 const FAKE_ENGINE = `(() => {
   const mem = new SharedArrayBuffer(160 << 20); let top = 140000000;
+  const dv = new DataView(mem), conn = 150000000;
+  dv.setUint32(43783020, conn, true); dv.setInt32(conn + 16, 2, true); dv.setUint16(conn + 24, 524, true);
   globalThis.__bo1zKB = { memory: { buffer: mem }, malloc: n => { const p = (top + 15) & ~15; top = p + n; return p; }, free: () => {} };
   dispatchEvent(new Event('bo1z:kb'));
   return crossOriginIsolated;
@@ -57,7 +61,7 @@ const FAKE_ENGINE = `(() => {
 
 const RING_HELPERS = `
   const { RingIO } = await import('/__bo1z/coop/ring.mjs');
-  const coop = globalThis.__bo1zCoop, L = coop.bridge.layout, io = new RingIO(globalThis.__bo1zKB.memory.buffer, L);
+  const coop = globalThis.__bo1zCoop, L = coop.layout ?? coop.bridge.layout, io = new RingIO(globalThis.__bo1zKB.memory.buffer, L);
   const oob = t => Uint8Array.from([255, 255, 255, 255, ...new TextEncoder().encode(t)]);
   const text = b => b[0] === 255 ? new TextDecoder().decode(b.subarray(4)) : null;
   // consumidor no estilo NET_GetLoopPacket
@@ -77,8 +81,8 @@ try {
     const glue = await p.evaluate(`fetch('/bo1z/artifacts/KisakBlack-web.mjs').then(r => r.text()).then(t => t.includes('globalThis.__bo1zKB = {'))`);
     if (!glue) fail(`${name}: glue servido sem N1`);
   }
-  const engineJs = await guest.evaluate(`fetch('/bo1z/engine.js').then(r => r.text()).then(t => t.includes("args.splice(at, 2, '+connect', 'localhost')"))`);
-  if (!engineJs) fail('convidado: engine.js sem a troca de +devmap por +connect');
+  const engineJs = await guest.evaluate(`fetch('/bo1z/engine.js').then(r => r.text()).then(t => t.includes("args.splice(at + 2, 0, '+connect', 'localhost:3074')"))`);
+  if (!engineJs) fail('convidado: engine.js sem a estratégia shadow (+devmap … +connect localhost:3074)');
   const hostEngineJs = await host.evaluate(`fetch('/bo1z/engine.js').then(r => r.text()).then(t => t.includes('__bo1zCoopGuest'))`);
   if (hostEngineJs) fail('host: engine.js não deveria ser alterado');
   console.log('main serve glue com N1 e engine.js do convidado: ok');
@@ -109,8 +113,11 @@ try {
   if (reply !== 'challengeResponse 7') fail(`resposta não chegou ao convidado (${reply})`);
   const seen = await host.evaluate(`JSON.stringify(__seen.slice(0, 3))`);
   console.log(`handshake pela sala UDP: ok (servidor viu ${seen}; convidado recebeu "${reply}")`);
-  const stats = await host.evaluate(`JSON.stringify(__bo1zCoop.stats().bridge)`);
-  console.log('ponte do host:', stats);
+  await sleep(1200); // estatísticas do Worker chegam a cada 1 s
+  const stats = await host.evaluate(`JSON.stringify({ modo: __bo1zCoop.mode, ponte: __bo1zCoop.stats()?.bridge })`);
+  console.log('ponte do host:', stats.slice(0, 400));
+  const lobbyState = await host.evaluate(`__bo1zLobby.getState().then(s => JSON.stringify({ phase: s.phase, mode: s.mode, role: s.role, room: s.room, maps: s.maps.length }))`);
+  console.log('estado da sala (lobby API):', lobbyState);
   console.log('\nSMOKE OK');
   cleanup(0);
 } catch (error) {
