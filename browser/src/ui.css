@@ -1,0 +1,30 @@
+/* Telas da extensão (opções e popup) no visual do menu do BO1: fundo escuro, títulos em caixa alta, laranja/branco. */
+:root { --bg: #0b0b0b; --panel: rgba(28, 28, 28, .92); --line: #3a3a3a; --text: #e8e8e8; --dim: #9a9a9a;
+  --accent: #f08a24; --ok: #7fd36b; --bad: #ff6b5b; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Arial Narrow", "Roboto Condensed", Arial, sans-serif; }
+h1, h2 { text-transform: uppercase; letter-spacing: .06em; font-weight: 700; margin: 0 0 12px; }
+h1 { font-size: 18px; color: #fff; }
+h1 span { color: var(--accent); }
+h2 { font-size: 13px; color: var(--accent); margin-top: 18px; }
+label { display: block; text-transform: uppercase; font-size: 12px; letter-spacing: .05em; color: var(--dim); margin: 12px 0 4px; }
+input, select { width: 100%; padding: 8px 10px; background: #151515; color: #fff; border: 1px solid var(--line); border-radius: 2px; font: inherit; }
+input:focus, select:focus { outline: none; border-color: var(--accent); }
+button { background: #1d1d1d; color: #fff; border: 1px solid var(--line); padding: 8px 12px; font: inherit; text-transform: uppercase;
+  letter-spacing: .05em; cursor: pointer; border-radius: 2px; }
+button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button.primary { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+.row { display: flex; gap: 8px; margin-top: 10px; }
+.row > * { flex: 1; }
+.hint { color: var(--dim); font-size: 12px; margin: 6px 0 0; }
+.msg { min-height: 1.4em; margin-top: 10px; }
+.msg.ok { color: var(--ok); }
+.msg.bad { color: var(--bad); }
+code { background: #1a1a1a; padding: 1px 4px; border-radius: 2px; color: #ffd2a6; word-break: break-all; }
+ul.players { list-style: none; padding: 0; margin: 8px 0 0; }
+ul.players li { display: flex; justify-content: space-between; padding: 6px 8px; background: var(--panel); border: 1px solid var(--line); margin-bottom: 4px; }
+.tag { font-size: 11px; padding: 0 5px; border: 1px solid var(--line); margin-left: 6px; color: var(--dim); }
+.tag.direct { color: var(--ok); border-color: var(--ok); }
+.tag.relay { color: var(--accent); border-color: var(--accent); }
+.tag.lost { color: var(--bad); border-color: var(--bad); }

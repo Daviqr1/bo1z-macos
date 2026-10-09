@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>BO1 Zombies — co-op</title>
+<link rel="stylesheet" href="ui.css">
+<style>body { width: 340px; padding: 14px; } [hidden] { display: none !important; }</style>
+<script type="module" src="popup.mjs"></script>
+</head>
+<body>
+  <h1>BO1 Zombies <span>co-op</span></h1>
+  <section id="idle">
+    <label for="name">Seu nome</label>
+    <input id="name" maxlength="24" placeholder="Jogador">
+    <label for="map">Mapa</label>
+    <select id="map"></select>
+    <div class="row"><button id="create" class="primary">Criar sala</button></div>
+    <label for="code">Entrar com código</label>
+    <div class="row"><input id="code" maxlength="64" placeholder="ABCDE ou link"><button id="join">Entrar</button></div>
+  </section>
+  <section id="room" hidden>
+    <h2 id="title"></h2>
+    <p class="hint" id="mapname"></p>
+    <ul class="players" id="players"></ul>
+    <div class="row">
+      <button id="copy">Copiar convite</button>
+      <button id="ready" hidden>Pronto</button>
+      <button id="start" class="primary" hidden>Iniciar partida</button>
+    </div>
+    <div class="row"><button id="leave">Sair da sala</button></div>
+  </section>
+  <p id="msg" class="msg" role="status"></p>
+  <p class="hint"><a href="options.html" target="_blank" style="color: inherit">Opções</a> · a sala também aparece em
+    JOGAR COM AMIGOS na tela de mapas do vel.gg.</p>
+</body>
+</html>

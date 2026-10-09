@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "BO1 Zombies — co-op",
+  "short_name": "BO1Z co-op",
+  "version": "0.1.0",
+  "description": "Co-op com amigos no BO1 Zombies do vel.gg: sala por link, lobby na tela de mapas e conexão P2P (WebRTC).",
+  "minimum_chrome_version": "116",
+  "permissions": ["offscreen", "storage"],
+  "host_permissions": ["https://vel.gg/*"],
+  "background": { "service_worker": "sw.js", "type": "module" },
+  "content_scripts": [
+    {
+      "matches": ["https://vel.gg/bo1z*"],
+      "js": ["content-isolated.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://vel.gg/bo1z*"],
+      "js": ["content-main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["lib/*", "coop/*", "lobby/*"], "matches": ["https://vel.gg/*"] }
+  ],
+  "action": { "default_title": "BO1 Zombies — co-op", "default_popup": "popup.html" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "128": "icons/128.png" }
+}

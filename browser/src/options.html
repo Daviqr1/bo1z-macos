@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BO1 Zombies — co-op: opções</title>
+<link rel="stylesheet" href="ui.css">
+<style>main { max-width: 520px; margin: 32px auto; padding: 0 16px; }</style>
+<script type="module" src="options.mjs"></script>
+</head>
+<body>
+<main>
+  <h1>BO1 Zombies <span>co-op</span></h1>
+  <p class="hint">Jogue o zombies do <code>vel.gg/bo1z</code> com amigos: crie uma sala na tela de mapas (JOGAR COM AMIGOS)
+    ou abra o link de convite que receberam.</p>
+  <form id="form">
+    <label for="name">Seu nome no jogo</label>
+    <input id="name" maxlength="24" autocomplete="nickname" placeholder="Jogador">
+    <p class="hint">No placar do jogo aparecem só letras sem acento, números, espaço e <code>_ . -</code> (até 15).</p>
+    <label for="signal">Servidor de convite (sinalização)</label>
+    <input id="signal" spellcheck="false" placeholder="bo1z-signal.seu-nome.workers.dev">
+    <p class="hint">Só quem cria a sala precisa dele. Quem entra por um link de convite usa o servidor do link.</p>
+    <div class="row"><button class="primary" type="submit">Salvar</button></div>
+    <p id="msg" class="msg" role="status"></p>
+  </form>
+  <h2>Convite pelo navegador</h2>
+  <p class="hint">O link tem o formato <code>https://vel.gg/bo1z/#bo1z-join=CÓDIGO&amp;s=SERVIDOR</code>. Com a extensão
+    instalada, abrir o link entra na sala direto.</p>
+</main>
+</body>
+</html>
