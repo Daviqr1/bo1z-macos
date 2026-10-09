@@ -1,22 +1,31 @@
 // BO1 Zombies.app: janela própria (Electron) para o port WebAssembly do vel.gg.
-// Perfil e cache dos packs ficam na imagem APFS do SSD externo (nada de jogo no disco interno).
+// Mac: perfil e cache dos packs ficam na imagem APFS do SSD externo (nada de jogo no disco interno).
+// Windows: tudo em %LOCALAPPDATA%/BO1 Zombies (zip portátil, ver scripts/package-windows.sh; os packs são grandes demais
+// para o AppData "Roaming").
 const { app, BrowserWindow, Menu, dialog, ipcMain, net, session, shell } = require('electron');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const IS_MAC = process.platform === 'darwin';
 const IMAGE = '/Volumes/SSD/Games/HighballGames.sparseimage';
 const VOLUME = '/Volumes/HighballGames';
-const HOME = path.join(VOLUME, 'bo1z');
+// BO1Z_HOME troca a pasta inteira (testes); BO1Z_PROFILE=<nome> usa outro perfil do Chromium na mesma pasta (segunda
+// instância no mesmo computador, ex.: convidado do teste local de co-op), com trava de instância única própria.
+const HOME = process.env.BO1Z_HOME ?? (IS_MAC ? path.join(VOLUME, 'bo1z') : path.join(process.env.LOCALAPPDATA ?? app.getPath('appData'), 'BO1 Zombies'));
+const PROFILE = process.env.BO1Z_PROFILE ?? '';
+const SUFFIX = PROFILE ? '-' + PROFILE : '';
 const CONFIG_FILE = path.join(HOME, 'config.json');
-const LOG_FILE = path.join(HOME, 'logs', 'game.log');
-const PERF_FILE = path.join(HOME, 'logs', 'perf.jsonl');
+const LOG_FILE = path.join(HOME, 'logs', `game${SUFFIX}.log`);
+const PERF_FILE = path.join(HOME, 'logs', `perf${SUFFIX}.jsonl`);
 
 // commands: dvars por mapa (zone), entram antes do +devmap. devmap liga sv_cheats, então dvars de cheat valem.
 const DEFAULT_CONFIG = {
   url: 'https://vel.gg/bo1z/',
-  patches: true, // serve o glue do motor (KisakBlack-web.mjs) com os patches de patches/manifest.json
+  // serve o glue do motor (KisakBlack-web.mjs) com os patches de patches/manifest.json; no Windows fica desligado até
+  // medir os patches de desempenho em D3D12 (spec §6)
+  patches: IS_MAC,
   renderScale: 1, // pixels de render por pixel da janela (o site usa até 2x no Retina, limitado a 1920 de largura)
   debugPort: 9334, // DevTools só em 127.0.0.1: telemetria e comandos de console ao vivo
   volume: 0.3, // volume inicial do jogo (0 a 1) em mapas onde você ainda não mexeu no slider de Options
@@ -25,10 +34,12 @@ const DEFAULT_CONFIG = {
     '*': [], // todos os mapas
     zombie_coast: ['+set', 'r_fog', '0'], // Call of the Dead sem névoa
   },
+  // co-op (app/coop/main-coop.js): role "off" | "host" | "guest"; o convidado precisa de "host": "ip:porta" e "code"
+  coop: { role: 'off', port: 27960, host: '', code: '', name: '' },
 };
 
 function mountGamesImage() {
-  if (fs.existsSync(VOLUME)) return;
+  if (!IS_MAC || process.env.BO1Z_HOME || fs.existsSync(VOLUME)) return;
   if (!fs.existsSync(IMAGE)) {
     dialog.showErrorBox('BO1 Zombies', `SSD externo não conectado (${IMAGE}).`);
     app.exit(1);
@@ -52,8 +63,9 @@ function log(source, message) {
 }
 
 mountGamesImage();
-app.setPath('userData', path.join(HOME, 'profile'));
+app.setPath('userData', path.join(HOME, 'profile' + SUFFIX));
 const config = loadConfig();
+const coop = require('./coop/main-coop.js').setupCoop({ config, log, logDir: path.dirname(LOG_FILE), gameUrl: config.url });
 
 // Desempenho: GPU sem blocklist, nada de throttling quando a janela perde foco ou fica coberta.
 for (const flag of ['ignore-gpu-blocklist', 'disable-background-timer-throttling',
@@ -76,7 +88,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 ipcMain.on('bo1z:config', event => {
   Object.assign(config, loadConfig());
   event.returnValue = { commands: config.commands, volume: config.volume, renderScale: config.renderScale,
-    muted: process.env.BO1Z_MUTE === '1' };
+    muted: process.env.BO1Z_MUTE === '1', coop: coop.preloadInfo() };
 });
 
 ipcMain.on('bo1z:perf', (event, summary) => {
@@ -104,6 +116,8 @@ function installGluePatches() {
   }
   session.defaultSession.protocol.handle('https', async request => {
     const url = new URL(request.url);
+    const coopResponse = await coop.handle(request, url);
+    if (coopResponse) return coopResponse;
     const name = url.pathname.split('/').pop();
     for (const [slug, files] of Object.entries(extras)) {
       const hit = files.find(f => url.pathname.endsWith('/' + slug + '/' + f.rel) || url.pathname.endsWith('/' + slug + '/pack/' + f.rel));
@@ -132,17 +146,22 @@ function installGluePatches() {
         return new Response(JSON.stringify(manifest), { status: 200, headers });
       }
     }
+    const isGlue = name === coop.glueName && request.url.includes('/artifacts/');
     const entry = config.patches && request.url.includes('/artifacts/') ? manifest[name] : null;
+    // Com sala ativa o glue sempre passa por aqui (o co-op precisa do patch N1, mesmo com patches: false).
+    if (!entry && !(isGlue && coop.active)) return net.fetch(request, { bypassCustomProtocolHandlers: true });
     const original = await net.fetch(request, { bypassCustomProtocolHandlers: true });
-    if (!entry || !original.ok) return original;
+    if (!original.ok) return original;
     const body = Buffer.from(await original.arrayBuffer());
     const headers = new Headers(original.headers);
     for (const h of ['content-length', 'content-encoding', 'etag']) headers.delete(h);
-    if (crypto.createHash('sha256').update(body).digest('hex') !== entry.original) {
+    let text = body;
+    if (entry && crypto.createHash('sha256').update(body).digest('hex') !== entry.original)
       log('patch', `${name}: original mudou no site, servindo sem patch`);
-      return new Response(body, { status: original.status, headers });
-    }
-    return new Response(fs.readFileSync(path.join(PATCH_DIR, entry.patched)), { status: 200, headers });
+    else if (entry && fs.existsSync(path.join(PATCH_DIR, entry.patched))) text = fs.readFileSync(path.join(PATCH_DIR, entry.patched));
+    else if (entry) log('patch', `${name}: ${entry.patched} não existe (rode node patches/build-glue.mjs), servindo sem patch`);
+    if (isGlue) text = await coop.finishGlue(text.toString('utf8'));
+    return new Response(text, { status: entry || isGlue ? 200 : original.status, headers });
   });
 }
 
@@ -173,6 +192,7 @@ function createWindow() {
   // Só as linhas de estatística do pipe WebGPU do motor (pipelines que bloquearam = engasgo); o resto do console é ignorado.
   win.webContents.on('console-message', ({ message }) => {
     if (message.startsWith('WEB_GPU')) fs.appendFile(PERF_FILE, JSON.stringify({ t: Date.now(), gpu: message.slice(0, 2000) }) + '\n', () => {});
+    else coop.consoleLine(message);
   });
   win.webContents.on('render-process-gone', async (event, details) => {
     log('crash', JSON.stringify(details));
@@ -187,13 +207,19 @@ function createWindow() {
 }
 
 Menu.setApplicationMenu(Menu.buildFromTemplate([
-  { label: 'BO1 Zombies', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'quit' }] },
+  { label: 'BO1 Zombies', submenu: IS_MAC ? [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'quit' }] : [{ role: 'quit' }] },
   { label: 'Jogo', submenu: [
     { label: 'Menu de mapas', accelerator: 'CmdOrCtrl+M', click: () => win?.loadURL(config.url) },
-    { role: 'reload' }, { role: 'zoom' }, { role: 'toggleDevTools' },
+    { role: 'reload' }, ...(IS_MAC ? [{ role: 'zoom' }] : []), { role: 'toggleDevTools' },
   ] },
+  ...(coop.active ? [{ label: 'Co-op', submenu: [
+    { label: coop.settings.role === 'host' ? 'Copiar convite' : `Convidado de ${coop.settings.host || '?'}`, enabled: coop.settings.role === 'host',
+      click: () => { const text = coop.copyInvite(); dialog.showMessageBox(win, { message: text ?? 'Sala ainda não abriu (veja o log do co-op).' }); } },
+    { label: 'Abrir log do co-op', click: () => shell.openPath(coop.logFile) },
+  ] }] : []),
 ]));
 
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
 app.whenReady().then(() => { installGluePatches(); createWindow(); });
 app.on('window-all-closed', () => app.quit());
+app.on('will-quit', () => coop.close());

@@ -3,13 +3,20 @@
 // Os comandos são escolhidos pelo mapa da página (<html data-map>), lido na hora em que o motor sobe.
 const { contextBridge, ipcRenderer } = require('electron');
 
-const { commands, volume, renderScale, muted } = ipcRenderer.sendSync('bo1z:config');
+const { commands, volume, renderScale, muted, coop } = ipcRenderer.sendSync('bo1z:config');
 
 // Telemetria leve: o mundo da página manda um resumo de frames a cada 10 s; o main grava em logs/perf.jsonl.
 contextBridge.exposeInMainWorld('__bo1zPerf', { report: summary => ipcRenderer.send('bo1z:perf', summary) });
 
+// Co-op (só com sala ativa no config/env): o main analisa o wasm e devolve o layout dos rings; o MessagePort que leva
+// os pacotes até o UDP do main chega aqui e passa para o mundo da página por window.postMessage (padrão do Electron).
+if (coop) {
+  contextBridge.exposeInMainWorld('__bo1zCoopHost', { layout: () => ipcRenderer.invoke('bo1z:coop-layout') });
+  ipcRenderer.on('bo1z:coop-port', event => window.postMessage({ bo1zCoopPort: true }, '*', event.ports));
+}
+
 contextBridge.executeInMainWorld({
-  func: (perMap, volume, renderScale, muted) => {
+  func: (perMap, volume, renderScale, muted, coop) => {
     // Resolução de render: o canvas.js do site usa min(devicePixelRatio, 1920/largura, 1440/altura) uma vez, antes
     // de entregar o canvas ao motor. Trocar o DPR visto pela página muda a resolução do jogo inteiro.
     if (renderScale > 0) Object.defineProperty(globalThis, 'devicePixelRatio', { configurable: true, get: () => renderScale });
@@ -27,6 +34,19 @@ contextBridge.executeInMainWorld({
       get: () => ({ commands: [...(perMap['*'] ?? []), ...(perMap[currentMap()] ?? [])] }) });
     if (muted) globalThis.__kisakMuted = true;
     globalThis.__bo1zInputTap = []; // glue patcheado (I1) empurra cada _KB_Input aqui; o gravador drena
+
+    // Co-op: app/coop/page.mjs (servido pelo main em /__bo1z/coop/) espera o motor (evento bo1z:kb do patch N1) e o port.
+    if (coop) {
+      if (coop.role === 'guest') globalThis.__bo1zCoopGuest = true; // engine.js do convidado troca +devmap por +connect
+      const portPromise = new Promise(resolve => addEventListener('message', function onPort(event) {
+        if (event.source !== window || !event.data?.bo1zCoopPort || !event.ports[0]) return;
+        removeEventListener('message', onPort);
+        resolve(event.ports[0]);
+      }));
+      import(location.origin + '/__bo1z/coop/page.mjs')
+        .then(m => m.boot({ role: coop.role, portPromise, getLayout: () => globalThis.__bo1zCoopHost.layout() }))
+        .catch(error => console.log(`BO1Z_COOP erro ${error.message}`));
+    }
 
     // Lê o anel de presents do motor (o mesmo do overlay ?perf=1 do site, com cursor próprio): sem chamada ao wasm.
     let engine = null, reader = null, frames = [], hitches = [];
@@ -47,5 +67,6 @@ contextBridge.executeInMainWorld({
       frames = []; hitches = [];
     }, 10000);
   },
-  args: [commands, volume, renderScale, muted],
+  args: [commands, volume, renderScale, muted, coop],
 });
+if (coop) ipcRenderer.send('bo1z:coop-hello');

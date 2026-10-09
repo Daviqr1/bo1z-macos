@@ -1,8 +1,10 @@
 // Gera patches/KisakBlack-web.patched.mjs a partir do glue formatado (prettier) do vel.gg + patches verificados.
-// node patches/build-glue.mjs   (escreve também patches/manifest.json com o sha256 do original esperado)
-import { readFileSync, writeFileSync } from 'node:fs';
+// node patches/build-glue.mjs   (escreve também patches/manifest.json com o sha256 do original esperado, e copia os
+// dois para app/patches/, que é o que o app serve)
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { applyPatches } from './hotpath_patch.mjs';
+import { applyN1 } from '../app/coop/gluepatch.mjs';
 const dir = new URL('./', import.meta.url).pathname;
 let src = readFileSync(dir + 'KisakBlack-web.pretty.mjs', 'utf8');
 const once = (from, to, label) => {
@@ -41,7 +43,12 @@ once('    _KB_Input = Module["_KB_Input"] = wasmExports["KB_Input"];', `    {
       };
       globalThis.__bo1zKBInput = kbInput;
     }`, 'I1');
+// N1: expõe memória/malloc do motor para a ponte de co-op (app/coop/gluepatch.mjs; inerte sem sala ativa).
+src = applyN1(src);
 writeFileSync(dir + 'KisakBlack-web.patched.mjs', src);
 const sha = f => createHash('sha256').update(readFileSync(dir + f)).digest('hex');
-writeFileSync(dir + 'manifest.json', JSON.stringify({ 'KisakBlack-web.mjs': { original: sha('KisakBlack-web.orig.mjs'), patched: 'KisakBlack-web.patched.mjs', patches: ['a', 'c', 'e', 'P01', 'I1'] } }, null, 2) + '\n');
+writeFileSync(dir + 'manifest.json', JSON.stringify({ 'KisakBlack-web.mjs': { original: sha('KisakBlack-web.orig.mjs'), patched: 'KisakBlack-web.patched.mjs', patches: ['a', 'c', 'e', 'P01', 'I1', 'N1'] } }, null, 2) + '\n');
+const appDir = new URL('../app/patches/', import.meta.url).pathname;
+mkdirSync(appDir, { recursive: true });
+for (const f of ['KisakBlack-web.patched.mjs', 'manifest.json']) copyFileSync(dir + f, appDir + f);
 console.log('ok', src.length);
