@@ -55,7 +55,9 @@ function binary(parts) {
 test('scanner acha o layout do motor analisado no trecho de NET_GetLoopPacket', () => {
   const r = scanWasm(binary([producer(DEFAULT_LAYOUT), getLoopPacket(DEFAULT_LAYOUT), producer(DEFAULT_LAYOUT)]));
   assert.equal(r.ok, true, r.reason);
-  assert.deepEqual(r.layout, { ...DEFAULT_LAYOUT });
+  for (const key of Object.keys(DEFAULT_LAYOUT)) assert.equal(r.layout[key], DEFAULT_LAYOUT[key], key);
+  // binário sintético sem CL_GetLocalClientConnection nem dvars: esses campos ficam nulos (a ponte segue sem eles)
+  assert.equal(r.layout.clientConnPtr, null);
   assert.equal(r.producers, 2);
 });
 
@@ -77,8 +79,11 @@ const REAL = process.env.BO1Z_WASM;
 test('scanner no wasm real (BO1Z_WASM)', { skip: !REAL || !existsSync(REAL) }, () => {
   const r = scanWasm(readFileSync(REAL));
   assert.equal(r.ok, true, r.reason);
-  assert.deepEqual(r.layout, { ...DEFAULT_LAYOUT });
+  for (const key of Object.keys(DEFAULT_LAYOUT)) assert.equal(r.layout[key], DEFAULT_LAYOUT[key], key);
   assert.equal(r.producers, 7); // NET_OutOfBandPrint/Data, Netchan_Transmit(+NextFragment), Netchan_Process, SV_SendClientVoiceData
+  // conferidos na memória do motor rodando (2026-10-09)
+  assert.equal(r.layout.clientConnPtr, 43783020);
+  assert.deepEqual({ ...r.layout.dvars, zombiemode: undefined }, { sv_running: 134904904, sv_paused: 134904892, sv_timeout: 142360560, zombiemode: undefined });
 });
 
 test('N1: expõe __bo1zKB depois de initRuntime, no glue formatado e no minificado; âncora ausente/duplicada falha', () => {

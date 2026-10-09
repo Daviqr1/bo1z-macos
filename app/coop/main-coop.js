@@ -7,12 +7,15 @@
 // Variáveis de ambiente têm prioridade: BO1Z_COOP (role), BO1Z_COOP_HOST, BO1Z_COOP_PORT, BO1Z_COOP_BIND,
 // BO1Z_COOP_CODE, BO1Z_COOP_NAME, BO1Z_COOP_START (guestStart).
 //
-// guestStart (pergunta 3 da spec — só o teste no Mac responde):
-//   connect: o engine.js do convidado sobe com "+connect localhost" no lugar de "+devmap <mapa>" (o motor ainda sobe o
-//            servidor local do "frontend" no Com_Init; o connect localhost o derruba e conecta pela ponte).
-//   manual:  o convidado sobe solo no mesmo mapa (servidor local com os dados do mapa, que o cgame deste motor lê
-//            direto: SV_GetConfigstring, G_ParseSpawnVars…) e depois manda "connect localhost" no console
-//            (tools/console.mjs 9335 "connect localhost").
+// guestStart (testado com o motor real em 2026-10-09):
+//   shadow (padrão): o convidado sobe o mesmo mapa com servidor local ("+devmap <mapa>") e logo em seguida
+//            "+connect localhost:3074". O servidor local fica de pé (o motor só o derruba para o texto exato
+//            "localhost") e fornece o que o cliente deste motor lê direto do servidor: zombiemode, árvores de
+//            animação, configstrings, entidades do BSP. O cliente ignora o servidor local (porta 0) e aceita o host
+//            (porta 524, o tag que a ponte grava).
+//   connect: "+connect localhost" no lugar do devmap (sem servidor local). Não funciona neste motor: sem servidor,
+//            zombiemode fica 0 (tabelas de rede diferentes) e o CL_DownloadsComplete compila scripts de servidor MP.
+//   manual:  sobe solo; "connect localhost:3074" depois, pelo console (tools/console.mjs 9335 …).
 'use strict';
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -20,11 +23,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { CoopHost, CoopGuest, bindPage, roomCode } = require('./udp.js');
 
-const MODULES = new Set(['page.mjs', 'netbridge.mjs', 'ring.mjs', 'layout.mjs']);
+const MODULES = new Set(['page.mjs', 'netbridge.mjs', 'ring.mjs', 'layout.mjs']); // servidos à página (wasmpatch/wasmscan/gluepatch ficam no main)
 const GLUE = 'KisakBlack-web.mjs', WASM = 'KisakBlack-web.wasm';
 
 function coopSettings(config, env = process.env) {
-  const c = { role: 'off', port: 27960, bind: '0.0.0.0', host: '', code: '', name: '', maxGuests: 3, guestStart: 'connect',
+  const c = { role: 'off', port: 27960, bind: '0.0.0.0', host: '', code: '', name: '', maxGuests: 3, guestStart: 'shadow',
     ...(config.coop ?? {}) };
   if (env.BO1Z_COOP) c.role = env.BO1Z_COOP;
   if (env.BO1Z_COOP_HOST) c.host = env.BO1Z_COOP_HOST;
@@ -62,10 +65,11 @@ function patchEngineForGuest(text, strategy) {
     text = text.replace(from, to);
     applied.push(label);
   };
-  if (strategy === 'connect') {
-    if (!text.includes("'+devmap', mapId")) throw new Error('engine.js connect: sem +devmap');
+  if (strategy === 'connect' || strategy === 'shadow') {
+    if (!text.includes("'+devmap', mapId")) throw new Error(`engine.js ${strategy}: sem +devmap`);
+    const splice = strategy === 'connect' ? "args.splice(at, 2, '+connect', 'localhost')" : "args.splice(at + 2, 0, '+connect', 'localhost:3074')";
     once('state.arguments = args;', "if (globalThis.__bo1zCoopGuest) { const at = args.indexOf('+devmap'); " +
-      "if (at >= 0) args.splice(at, 2, '+connect', 'localhost'); } state.arguments = args;", 'connect');
+      `if (at >= 0) ${splice}; } state.arguments = args;`, strategy);
   }
   try {
     once("if (/Com_ERROR:\\s*PLATFORM_DISCONNECTED_FROM_SERVER/.test(message)) quit('disconnect');",
@@ -82,8 +86,8 @@ function setupCoop({ config, log, logDir, gameUrl }) {
   const clog = (what, msg) => fs.appendFile(coopLog, `${new Date().toISOString()} [${what}] ${msg}\n`, () => {});
   let esm = null, layout = null, transport = null, current = null, unbind = null;
   const watched = new WeakSet();
-  const loadEsm = () => (esm ??= Promise.all([import('./gluepatch.mjs'), import('./wasmscan.mjs')])
-    .then(([g, w]) => ({ applyN1: g.applyN1, N1_MARK: g.N1_MARK, scanWasm: w.scanWasm })));
+  const loadEsm = () => (esm ??= Promise.all([import('./gluepatch.mjs'), import('./wasmscan.mjs'), import('./wasmpatch.mjs')])
+    .then(([g, w, p]) => ({ applyN1: g.applyN1, N1_MARK: g.N1_MARK, scanWasm: w.scanWasm, patchGuestWasm: p.patchGuestWasm })));
 
   async function scan(bytes, source) {
     const { scanWasm } = await loadEsm();
@@ -108,8 +112,15 @@ function setupCoop({ config, log, logDir, gameUrl }) {
     if (file === WASM && url.pathname.includes('/artifacts/')) {
       const original = await net.fetch(request, { bypassCustomProtocolHandlers: true });
       if (!original.ok || request.headers.get('range')) return original;
-      const body = Buffer.from(await original.arrayBuffer());
+      let body = Buffer.from(await original.arrayBuffer());
       await scan(body, 'página');
+      if (settings.role === 'guest' && settings.guestStart === 'shadow') {
+        const { patchGuestWasm } = await loadEsm();
+        const p = patchGuestWasm(body);
+        clog('wasm', `patches do convidado: ${p.applied.map(a => a.label).join(', ') || 'nenhum'}${p.errors.length ? ` — falhas: ${p.errors.join('; ')}` : ''}`);
+        if (!p.errors.length) body = p.buf;
+        else if (layout) layout = { ...layout, ok: false, reason: `wasm do convidado sem patch: ${p.errors.join('; ')}` };
+      }
       const headers = new Headers(original.headers);
       for (const h of ['content-length', 'content-encoding', 'etag']) headers.delete(h);
       return new Response(body, { status: original.status, headers });
@@ -185,8 +196,15 @@ function setupCoop({ config, log, logDir, gameUrl }) {
     return scan(Buffer.from(await response.arrayBuffer()), 'main');
   });
 
+  // Nome no placar do jogo: entra como "+set name …" antes do +devmap/+connect (só letras, números e _ . -).
+  const engineName = settings.name.replace(/[^A-Za-z0-9_.\- ]/g, '').trim().slice(0, 15) || 'Player';
+  // Host: sv_timeout 30 (padrão do motor: 240 s) para a vaga de quem caiu/recarregou sumir logo.
+  const withCoopCommands = commands => !active ? commands
+    : { ...commands, '*': [...(commands?.['*'] ?? []), '+set', 'name', engineName,
+      ...(settings.role === 'host' ? ['+set', 'sv_timeout', '30'] : [])] };
+
   return {
-    active, settings, handle, finishGlue, clog, glueName: GLUE,
+    active, settings, handle, finishGlue, clog, glueName: GLUE, withCoopCommands,
     // Linha de console da página que começa com BO1Z_COOP: vai para o log do co-op.
     consoleLine: message => { if (active && message.startsWith('BO1Z_COOP')) clog('página', message.slice(10, 4000)); },
     preloadInfo: () => active ? { role: settings.role, guestStart: settings.guestStart } : null,

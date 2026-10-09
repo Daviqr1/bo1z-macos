@@ -8,7 +8,8 @@
 //                           ponte; ver ring.mjs/publish e o contador `clobbered`).
 //   drainRing(k, cb)        pacotes do servidor para o convidado k (só a ponte lê esse ring).
 // Convidado (sem servidor local; `connect localhost`):
-//   injectToClient(bytes)   pacote do host -> C.loopbacks[0] (caixa de entrada do cliente; produtor único).
+//   injectToClient(bytes)   pacote do host -> C.loopbacks[0] (caixa de entrada do cliente; produtor único), com tag =
+//                           layout.clientServerPort: o cliente compara a porta do remetente com a do "localhost".
 //   drainClientOut(cb)      pacotes do cliente -> leitor passivo do C.loopbacks[1] (o motor pode drenar esse ring
 //                           sozinho quando não há servidor; o cursor da ponte é independente).
 import { DEFAULT_LAYOUT, MAX_RING, RING_CLIENT, RING_SERVER } from './layout.mjs';
@@ -41,7 +42,7 @@ export function createNetBridge({ buffer, layout = DEFAULT_LAYOUT, malloc = null
   const hostRings = new Map(); // k -> { ring, ptr, reader }
   const recent = []; // publicações recentes no ring 1 do host, para detectar clobber pelo motor
   const stats = { injectedToServer: 0, casRetries: 0, injectFailed: 0, clobbered: 0, phantom: 0, drainedForGuests: 0,
-    injectedToClient: 0, drainedFromClient: 0, oversize: 0, queued: 0, dropped: 0 };
+    injectedToClient: 0, drainedFromClient: 0, oversize: 0, queued: 0, dropped: 0, localOnly: 0 };
   // Criado já com a ponte (antes do main do motor, no N1): o convidado não perde o getchallenge do começo.
   const clientReader = io.reader(io.addr(RING_SERVER), { fromNow: true });
 
@@ -153,8 +154,9 @@ export function createNetBridge({ buffer, layout = DEFAULT_LAYOUT, malloc = null
     return n;
   }
 
+  const clientTag = L.clientServerPort ?? 0;
   function publishToClient(bytes) {
-    const r = io.publish(clientRing, bytes, 0);
+    const r = io.publish(clientRing, bytes, clientTag);
     stats.casRetries += r.retries;
     if (!r.ok) { ++stats.injectFailed; return false; }
     ++stats.injectedToClient;
@@ -180,10 +182,36 @@ export function createNetBridge({ buffer, layout = DEFAULT_LAYOUT, malloc = null
     return serverQueue.length + clientQueue.length;
   }
 
-  function drainClientOut(onPacket, max) {
-    const n = clientReader.drain(bytes => onPacket(bytes), max);
-    stats.drainedFromClient += n;
+  // armed=false: o cliente ainda fala com o servidor local (estratégia shadow); os pacotes são lidos e descartados.
+  function drainClientOut(onPacket, max, armed = true) {
+    const n = clientReader.drain(bytes => { if (armed) onPacket(bytes); else ++stats.localOnly; }, max);
+    if (armed) stats.drainedFromClient += n;
     return n;
+  }
+
+  // Valor atual (int na +24) de um dvar conhecido pelo scanner; null se o scanner não achou ou ainda não registrado.
+  function dvar(name) {
+    const g = L.dvars?.[name];
+    if (!g) return null;
+    const d = Atomics.load(io.i32, g >> 2) >>> 0;
+    return d ? Atomics.load(io.i32, (d + (L.dvarValueOff ?? 24)) >> 2) : null;
+  }
+  function setDvar(name, value) {
+    const g = L.dvars?.[name];
+    if (!g) return false;
+    const d = Atomics.load(io.i32, g >> 2) >>> 0;
+    if (!d) return false;
+    Atomics.store(io.i32, (d + (L.dvarValueOff ?? 24)) >> 2, value);
+    return true;
+  }
+
+  // Para onde o cliente local está conectado: { type, port } do serverAddress, ou null sem o ponteiro do scanner.
+  function clientTarget() {
+    if (!L.clientConnPtr) return null;
+    const conn = Atomics.load(io.i32, L.clientConnPtr >> 2) >>> 0;
+    if (!conn) return { type: 0, port: 0 };
+    const a = conn + (L.serverAddressOff ?? 16);
+    return { type: Atomics.load(io.i32, a >> 2), port: io.u8[a + 8] | (io.u8[a + 9] << 8) };
   }
 
   function snapshot() {
@@ -193,6 +221,6 @@ export function createNetBridge({ buffer, layout = DEFAULT_LAYOUT, malloc = null
     return { ...stats, readers, rings: [...hostRings.keys()], pending: serverQueue.length + clientQueue.length };
   }
 
-  return { layout: L, io, openHostRing, closeHostRing, injectToServer, drainRing, injectToClient, drainClientOut, pump,
+  return { layout: L, io, openHostRing, closeHostRing, injectToServer, drainRing, injectToClient, drainClientOut, clientTarget, dvar, setDvar, pump,
     checkClobbers, stats: snapshot };
 }

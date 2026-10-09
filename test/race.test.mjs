@@ -61,7 +61,8 @@ test('produtor único (ponte -> ring 0 do convidado): fila com contrapressão, s
   const layout = TEST_LAYOUT, buffer = makeMemory(layout);
   const bridge = createNetBridge({ buffer, layout });
   const ctl = new SharedArrayBuffer(16), flags = new Int32Array(ctl);
-  const { worker, done } = startWorker({ buffer, layout, ctl, mode: 'consume', port: 0 });
+  // o cliente do convidado só aceita pacotes com a porta do "localhost" resolvido (layout.clientServerPort)
+  const { worker, done } = startWorker({ buffer, layout, ctl, mode: 'consume', port: layout.clientServerPort });
   const total = 60000;
   for (let i = 0; i < total; ++i) {
     bridge.injectToClient(makePacket(3, i, 40 + (i * 37) % 1224));

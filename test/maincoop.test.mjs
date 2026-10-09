@@ -19,6 +19,7 @@ function start() {
 
 test('config do co-op: padrão desligado, env tem prioridade, role inválido vira off', () => {
   assert.equal(coopSettings({}, {}).role, 'off');
+  assert.equal(coopSettings({}, {}).guestStart, 'shadow');
   const c = coopSettings({ coop: { role: 'guest', host: '1.2.3.4', code: 'AAAAA' } }, { BO1Z_COOP_HOST: '100.64.0.9:27961', BO1Z_COOP_START: 'manual' });
   assert.deepEqual([c.role, c.host, c.code, c.guestStart, c.port], ['guest', '100.64.0.9:27961', 'AAAAA', 'manual', 27960]);
   assert.equal(coopSettings({ coop: { role: 'server' } }, {}).role, 'off');
@@ -37,12 +38,19 @@ test('engine.js do convidado: +devmap vira +connect localhost depois dos splices
   assert.deepEqual(run(true), { args: ['+set', 'x', '1', '+set', 'sensitivity', '5', '+connect', 'localhost'], quits: [] });
   assert.deepEqual(run(false), { args: ['+set', 'x', '1', '+set', 'sensitivity', '5', '+devmap', 'zombie_coast'], quits: ['disconnect'] });
   assert.deepEqual(patchEngineForGuest(ENGINE, 'manual').applied, ['noquit']);
+  // shadow (padrão): mantém o +devmap (servidor local com os dados do mapa) e conecta no host logo depois
+  const shadow = patchEngineForGuest(ENGINE, 'shadow');
+  assert.deepEqual(shadow.applied, ['shadow', 'noquit']);
+  const state = {};
+  new Function('mapId', 'message', 'quit', 'state', 'globalThis', shadow.text + '\nstart();')('zombie_cod5_prototype', '', () => {}, state, { __bo1zCoopGuest: true });
+  assert.deepEqual(state.arguments.slice(-4), ['+devmap', 'zombie_cod5_prototype', '+connect', 'localhost:3074']);
   assert.throws(() => patchEngineForGuest('state.arguments = args;', 'connect'), /sem \+devmap/);
 });
 
 const REAL = process.env.BO1Z_ENGINE_JS;
 test('engine.js real do site (BO1Z_ENGINE_JS)', { skip: !REAL || !existsSync(REAL) }, () => {
   assert.deepEqual(patchEngineForGuest(readFileSync(REAL, 'utf8'), 'connect').applied, ['connect', 'noquit']);
+  assert.deepEqual(patchEngineForGuest(readFileSync(REAL, 'utf8'), 'shadow').applied, ['shadow', 'noquit']);
 });
 
 test('convite lista endereços IPv4 com porta', () => {

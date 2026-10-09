@@ -75,6 +75,7 @@ test('handshake de 2 convidados: cada um no seu ring k, sem tocar no cliente loc
     const p = g.eng.getLoopPacket(0);
     assert.equal(oobText(p.bytes), 'challengeResponse 123');
     assert.equal(p.from.type, NA_LOOPBACK);
+    assert.equal(p.from.port, L.clientServerPort); // o cliente compara com a porta do "localhost" (524)
     assert.equal(g.eng.getLoopPacket(0), null);
   }
 
@@ -147,4 +148,22 @@ test('auxiliares: OOB, texto e qport', () => {
   assert.equal(clientQport(seqFromClient(9, 0xbeef, [])), 0xbeef);
   assert.equal(clientQport(oob('getchallenge')), null);
   assert.equal(dec.decode(oob('ab').subarray(4)), 'ab');
+});
+
+test('convidado: alvo do cliente (serverAddress) e dvars pelo layout do scanner', () => {
+  const mem = makeMemory(), dv = new DataView(mem);
+  const layout = { ...L, clientConnPtr: 6000000, serverAddressOff: 16, dvars: { sv_running: 6000100, sv_paused: 6000104 }, dvarValueOff: 24 };
+  const bridge = createNetBridge({ buffer: mem, layout });
+  assert.deepEqual(bridge.clientTarget(), { type: 0, port: 0 }); // conexão ainda não alocada
+  dv.setUint32(6000000, 6001000, true);
+  dv.setInt32(6001000 + 16, 2, true); dv.setUint16(6001000 + 24, 524, true);
+  assert.deepEqual(bridge.clientTarget(), { type: 2, port: 524 });
+  assert.equal(bridge.dvar('sv_running'), null); // dvar ainda não registrado
+  dv.setUint32(6000100, 6002000, true); dv.setInt32(6002000 + 24, 1, true);
+  dv.setUint32(6000104, 6002100, true);
+  assert.equal(bridge.dvar('sv_running'), 1);
+  assert.equal(bridge.setDvar('sv_paused', 1), true);
+  assert.equal(dv.getInt32(6002100 + 24, true), 1);
+  assert.equal(bridge.setDvar('zombiemode', 1), false); // fora do layout
+  assert.equal(createNetBridge({ buffer: mem, layout: L }).clientTarget(), null); // sem ponteiro: sem alvo
 });

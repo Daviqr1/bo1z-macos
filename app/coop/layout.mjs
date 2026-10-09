@@ -20,6 +20,10 @@ export const DEFAULT_LAYOUT = Object.freeze({
   sendOff: 20356,
   overrun: 17, // send-get >= overrun => o consumidor do motor pula para send-16
   memoryBytes: 2147418112, // 32767 páginas, memória compartilhada fixa (não cresce)
+  // Porta (u16 como fica na memória) do endereço que "connect localhost" resolve no cliente: 3074 em ordem de rede
+  // (bytes 0C 02). O cliente só aceita connectResponse/pacotes cujo from.port seja essa (NET_CompareBaseAdr compara a
+  // porta em loopback), então a ponte do convidado grava esse tag no ring 0. Confirmado no motor rodando (2026-10-09).
+  clientServerPort: 524,
 });
 
 export const RING_CLIENT = 0; // caixa de entrada do cliente local
