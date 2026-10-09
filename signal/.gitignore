@@ -1,0 +1,3 @@
+# estado local do wrangler dev (Durable Objects, logs) e segredos locais
+.wrangler/
+.dev.vars

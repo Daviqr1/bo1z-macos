@@ -1,0 +1,17 @@
+{
+  "name": "bo1z-signal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servidor de sinalização do co-op do BO1 Zombies (Cloudflare Worker + Durable Object)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:node": "node dev-server.mjs",
+    "deploy": "wrangler deploy",
+    "test": "node --test ../test/signal-*.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.136.3"
+  }
+}

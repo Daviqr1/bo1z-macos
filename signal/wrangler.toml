@@ -1,0 +1,25 @@
+# Sinalização do co-op do BO1 Zombies: Worker + Durable Object (uma instância por sala). Passo a passo no README.md.
+name = "bo1z-signal"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "RoomDO"
+
+# SQLite: o único tipo de Durable Object do plano gratuito.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDO"]
+
+[observability]
+enabled = true
+
+# Opcionais (descomente e preencha): links de download na página de convite e domínio próprio para os convites.
+# [vars]
+# DOWNLOAD_WIN_URL = "https://exemplo.com/BO1-Zombies-win64.zip"
+# DOWNLOAD_MAC_URL = "https://exemplo.com/BO1-Zombies-mac.zip"
+# PUBLIC_ORIGIN = "https://salas.exemplo.com"
+#
+# Segredos (nunca aqui): npx wrangler secret put TURN_KEY_ID / TURN_KEY_API_TOKEN

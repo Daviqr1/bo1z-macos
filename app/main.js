@@ -73,6 +73,8 @@ for (const flag of ['ignore-gpu-blocklist', 'disable-background-timer-throttling
   app.commandLine.appendSwitch(flag);
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('force-gpu-mem-available-mb', '6144');
+// WebRTC do co-op: candidatos com o IP local de verdade (sem mDNS), para dois jogadores na mesma casa ligarem direto.
+require('./net/net-window.js').applyNetSwitches(app);
 // WebGPU (Dawn): o jogo só manda comandos já validados no Chrome, então a validação por chamada e os bounds checks
 // dos shaders são custo puro de CPU/GPU aqui. "webgpuFast": true no config.json liga (no A/B não ajudou).
 if (config.webgpuFast) app.commandLine.appendSwitch('enable-dawn-features', 'skip_validation,disable_robustness');

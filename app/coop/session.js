@@ -60,7 +60,7 @@ class CoopSession extends EventEmitter {
     this.maps = DEFAULT_MAPS;
     this.prefs = this.loadPrefs();
     this.state = this.blankState();
-    this.net = null; // janela oculta (WebRTC)
+    this.net = null; // janela oculta (WebRTC): app/net/net-window.js
     this.transport = null; // CoopHost/CoopGuest (modo por IP)
     this.unbind = null;
     this.legacy = null;
@@ -71,9 +71,6 @@ class CoopSession extends EventEmitter {
       const name = cleanName(env.BO1Z_COOP_NAME) || this.prefs.name;
       this.connectByAddress({ role: env.BO1Z_COOP, address: env.BO1Z_COOP_HOST || '', code: env.BO1Z_COOP_CODE || '', name,
         bind: env.BO1Z_COOP_BIND, port: Number(env.BO1Z_COOP_PORT) || udpPort }).catch(error => this.log('sessão', error.message));
-    }
-    if (deps.ipcMain) {
-      deps.ipcMain.on('bo1z:net-state', (event, s) => { if (this.net && event.sender === this.net.webContents) this.onNetState(s); });
     }
   }
 
@@ -123,32 +120,32 @@ class CoopSession extends EventEmitter {
     return clean || this.prefs.name || 'Jogador';
   }
 
-  // ---- janela net (WebRTC) ----
+  // ---- janela net (WebRTC): criada na primeira sala e mantida viva (a conexão sobrevive à troca lobby -> mapa) ----
   ensureNet() {
-    if (this.net && !this.net.isDestroyed()) return this.net;
-    const { BrowserWindow } = this.deps;
-    this.net = new BrowserWindow({ show: false, width: 200, height: 200, webPreferences: {
-      preload: path.join(this.appDir, 'net', 'net-preload.js'), backgroundThrottling: false, spellcheck: false } });
-    this.netReady = new Promise(resolve => this.net.webContents.once('did-finish-load', resolve));
-    this.net.loadFile(path.join(this.appDir, 'net', 'net.html'));
-    this.net.on('closed', () => { this.net = null; });
+    if (this.net && !this.net.win.isDestroyed()) return this.net;
+    const create = this.deps.createNetWindow ?? require('../net/net-window.js').createNetWindow;
+    this.net = create({ onState: s => this.onNetState(s), onLog: line => this.log('net', line) });
+    this.net.win.on('closed', () => { this.net = null; });
     return this.net;
   }
   async netCmd(cmd, args = {}) {
-    const win = this.ensureNet();
-    await this.netReady;
-    win.webContents.send('bo1z:net-cmd', { cmd, args });
+    this.ensureNet().command(cmd, args);
   }
   onNetState(s) {
     if (!s || typeof s !== 'object') return;
     const patch = {};
     for (const key of ['phase', 'role', 'room', 'invite', 'you', 'peers', 'signal', 'error']) if (key in s) patch[key] = s[key];
-    // a rede não sabe de "starting/playing": quem decide é a navegação daqui
-    if (PHASES_WITH_GAME.has(this.state.phase) && (patch.phase === 'lobby' || patch.phase === 'connecting')) delete patch.phase;
+    // starting/playing é decidido aqui (startMap e a página do mapa); a rede só manda voltar ao idle/erro
+    if (patch.phase === 'starting' || (PHASES_WITH_GAME.has(this.state.phase) && ['lobby', 'connecting'].includes(patch.phase)))
+      delete patch.phase;
     if (s.lobbyMap) patch.map = this.mapByZone(s.lobbyMap) ?? this.state.map;
+    if (s.you && 'ready' in s.you) patch.ready = !!s.you.ready;
     this.setState({ mode: 'webrtc', ...patch });
-    if (s.startMap && s.startMap !== this.startedMap) this.beginGame(s.startMap);
-    if (s.phase === 'idle' && this.state.mode === 'webrtc') this.setState({ ...this.blankState() });
+    // startMap = { zone, at }: "at" muda a cada início (o host pode reiniciar no mesmo mapa)
+    const start = s.startMap && typeof s.startMap === 'object' ? s.startMap : s.startMap ? { zone: s.startMap, at: 0 } : null;
+    const key = start && `${start.zone}@${start.at}`;
+    if (start && key !== this.startKey) { this.startKey = key; this.beginGame(start.zone); }
+    if (s.phase === 'idle' && this.state.mode === 'webrtc') { this.startKey = null; this.setState({ ...this.blankState() }); }
   }
 
   // ---- API do lobby (§3) ----
@@ -235,6 +232,7 @@ class CoopSession extends EventEmitter {
     if (this.transport) { this.transport.close(); this.transport = null; }
     if (this.state.mode === 'webrtc' && this.net) await this.netCmd('leave');
     this.startedMap = null;
+    this.startKey = null;
     this.setState(this.blankState());
     return this.getState();
   }
@@ -291,7 +289,7 @@ class CoopSession extends EventEmitter {
     const { port1, port2 } = new MessageChannelMain();
     webContents.postMessage('bo1z:coop-port', null, [port2]);
     if (this.state.mode === 'webrtc' && this.net) {
-      this.net.webContents.postMessage('bo1z:net-port', null, [port1]);
+      this.net.attachPort(port1);
     } else if (this.transport) {
       this.unbind?.();
       this.currentPort?.close();
@@ -316,7 +314,8 @@ class CoopSession extends EventEmitter {
   close() {
     clearInterval(this.pingTimer);
     this.transport?.close();
-    if (this.net && !this.net.isDestroyed()) this.net.destroy();
+    this.net?.destroy();
+    this.net = null;
   }
 }
 
