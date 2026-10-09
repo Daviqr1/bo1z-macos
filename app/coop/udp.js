@@ -256,7 +256,8 @@ function bindPage(transport, role, port, listen, log = () => {}, statsEveryMs = 
   const post = m => { try { port.postMessage(m); } catch { /* port fechado */ } };
   const onPacket = role === 'host' ? (id, b) => post({ t: 'pkt', id, b }) : b => post({ t: 'pkt', b });
   const onJoin = (id, info) => post({ t: 'join', id, ...info });
-  const onLeave = (id, reason) => post({ t: 'leave', id, reason });
+  // motivo no vocabulário da página: 'lost' (sumiu; a página guarda o ring para a volta) ou 'left' (saiu de verdade)
+  const onLeave = (id, reason) => post({ t: 'leave', id, reason: reason === 'sem resposta' ? 'lost' : 'left' });
   transport.on('packet', onPacket);
   if (role === 'host') { transport.on('join', onJoin); transport.on('leave', onLeave); }
   listen(m => {

@@ -14,6 +14,7 @@ export function connectQport(text) {
 }
 
 const RESERVED_RINGS = 8; // 3 convidados + folga para quem cai e volta (cada ring custa ~40 KB do heap)
+const HOLD_MS = 40000; // ring de quem caiu por rede espera a volta (sv_timeout do host é 30 s)
 
 // rings: ks já reservados (Worker: o malloc é feito na página). schedule: 'interval' (setInterval, piso de ~4 ms na
 // página) ou 'wait' (Atomics.waitAsync de 1 ms, para o Worker dedicado).
@@ -24,8 +25,13 @@ export function startCoop({ role, port, layout, kb, log = console.log, intervalM
   // timeout; um "connect" novo pelo mesmo k com outro qport (motor recarregado, outro convidado) levaria
   // EXE_ERR_QPORT e o cliente desiste. Por isso: ring novo a cada entrada e a cada qport novo; reciclagem só dos mais
   // antigos (o slot velho já expirou quando chega a vez deles).
-  const spare = [], peers = new Map(), retired = [], ringQport = new Map();
-  const takeRing = () => spare.shift() ?? retired.shift();
+  // Queda de rede (leave 'lost'): o ring fica guardado para o mesmo convidado por HOLD_MS (> sv_timeout 30 s do host);
+  // se o enlace volta (join com o mesmo id), o motor dele segue no mesmo slot do servidor como se nada tivesse havido.
+  const spare = [], peers = new Map(), retired = [], ringQport = new Map(), held = new Map();
+  const releaseHeld = (now = performance.now()) => {
+    for (const [id, h] of held) if (now - h.at > HOLD_MS) { held.delete(id); retired.push(h.k); }
+  };
+  const takeRing = () => { releaseHeld(); return spare.shift() ?? retired.shift(); };
   const traffic = { in: 0, out: 0, inBytes: 0, outBytes: 0 }, handshake = [];
   let net = null;
 
@@ -73,6 +79,14 @@ export function startCoop({ role, port, layout, kb, log = console.log, intervalM
       } else bridge.injectToClient(m.b);
     } else if (m.t === 'join' && role === 'host') {
       if (peers.has(m.id)) return; // o main reapresenta os convidados quando a página fica pronta; o join pode vir 2x
+      releaseHeld();
+      const back = held.get(m.id);
+      if (back) {
+        held.delete(m.id);
+        peers.set(m.id, back.k);
+        log(`convidado #${m.id} voltou depois de ${Math.round((performance.now() - back.at) / 1000)} s -> mesmo ring ${back.k}`);
+        return;
+      }
       const k = takeRing();
       if (k === undefined) { port.postMessage({ t: 'full', id: m.id }); log(`sem ring livre para #${m.id}`); return; }
       peers.set(m.id, k);
@@ -81,8 +95,9 @@ export function startCoop({ role, port, layout, kb, log = console.log, intervalM
     } else if (m.t === 'leave' && role === 'host') {
       const k = peers.get(m.id);
       peers.delete(m.id);
-      if (k !== undefined) retired.push(k);
-      log(`convidado #${m.id} saiu (${m.reason ?? ''})`);
+      if (k !== undefined && m.reason === 'lost') held.set(m.id, { k, at: performance.now() });
+      else if (k !== undefined) retired.push(k);
+      log(`convidado #${m.id} saiu (${m.reason ?? ''})${m.reason === 'lost' ? `; ring ${k} guardado por ${HOLD_MS / 1000} s` : ''}`);
     } else if (m.t === 'net') net = m.stats;
   };
 

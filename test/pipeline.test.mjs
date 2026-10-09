@@ -108,3 +108,29 @@ test('sala UDP: código errado é recusado; sala cheia; utilidades', async t => 
   assert.deepEqual(splitAddress('[fd7a::1]:5'), { address: 'fd7a::1', port: 5 });
   assert.match(roomCode(), /^[A-HJ-KM-NP-Z2-9]{5}$/);
 });
+
+test('host: quem cai por rede (lost) volta no mesmo ring; quem sai de verdade não', async t => {
+  const host = instance('host');
+  t.after(() => { host.coop.stop(); host.port1.close(); });
+  const send = m => host.port1.postMessage(m);
+  const ringOf = id => host.coop.stats().peers[id];
+  send({ t: 'join', id: 'a', slot: 1, name: 'irmao' });
+  assert.ok(await until(() => ringOf('a') !== undefined));
+  const k = ringOf('a');
+  send({ t: 'leave', id: 'a', reason: 'lost' });
+  assert.ok(await until(() => ringOf('a') === undefined));
+  // outro convidado entrando enquanto "a" está fora não pega o ring guardado
+  send({ t: 'join', id: 'b', slot: 2, name: 'primo' });
+  assert.ok(await until(() => ringOf('b') !== undefined));
+  assert.notEqual(ringOf('b'), k);
+  send({ t: 'join', id: 'a', slot: 1, name: 'irmao' });
+  assert.ok(await until(() => ringOf('a') !== undefined));
+  assert.equal(ringOf('a'), k, 'voltou em outro ring: o motor do convidado perderia o slot no servidor');
+  assert.ok(host.lines.some(l => l.includes(`voltou depois de`)));
+  // saída de verdade: ring novo na volta (o motor do convidado é outro)
+  send({ t: 'leave', id: 'a', reason: 'left' });
+  assert.ok(await until(() => ringOf('a') === undefined));
+  send({ t: 'join', id: 'a', slot: 1, name: 'irmao' });
+  assert.ok(await until(() => ringOf('a') !== undefined));
+  assert.notEqual(ringOf('a'), k);
+});
