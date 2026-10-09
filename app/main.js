@@ -87,7 +87,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 // Relido a cada página: mudanças no config.json valem ao entrar no próximo mapa, sem reiniciar o app.
 ipcMain.on('bo1z:config', event => {
   Object.assign(config, loadConfig());
-  event.returnValue = { commands: config.commands, volume: config.volume, renderScale: config.renderScale,
+  event.returnValue = { commands: coop.withCoopCommands(config.commands), volume: config.volume, renderScale: config.renderScale,
     muted: process.env.BO1Z_MUTE === '1', coop: coop.preloadInfo() };
 });
 
