@@ -77,7 +77,7 @@ function patchEngineForGuest(text, strategy) {
 }
 
 function setupCoop({ config, log, logDir, gameUrl, appDir = path.join(__dirname, '..'), home }) {
-  const { ipcMain, MessageChannelMain, net, clipboard, BrowserWindow, webContents: allContents } = require('electron');
+  const { ipcMain, MessageChannelMain, net, clipboard, BrowserWindow, powerSaveBlocker, webContents: allContents } = require('electron');
   const settings = coopSettings(config);
   const coopLog = path.join(logDir, `coop${process.env.BO1Z_PROFILE ? '-' + process.env.BO1Z_PROFILE : ''}.log`);
   const clog = (what, msg) => fs.appendFile(coopLog, `${new Date().toISOString()} [${what}] ${msg}\n`, () => {});
@@ -180,6 +180,14 @@ function setupCoop({ config, log, logDir, gameUrl, appDir = path.join(__dirname,
   ipcMain.handle('bo1z:lobby-call', async (event, { fn, args } = {}) => {
     if (!LOBBY_CALLS.has(fn)) throw new Error(`chamada desconhecida: ${fn}`);
     return session[fn](...(Array.isArray(args) ? args : []));
+  });
+  // Com sala aberta o sistema não suspende o app (App Nap no Mac, economia de energia no Windows): um host suspenso
+  // congela o servidor e derruba os convidados. A tela ainda pode apagar.
+  let blocker = null;
+  session.on('state', state => {
+    const busy = ['connecting', 'lobby', 'starting', 'playing'].includes(state.phase);
+    if (busy && blocker === null) blocker = powerSaveBlocker.start('prevent-app-suspension');
+    else if (!busy && blocker !== null) { powerSaveBlocker.stop(blocker); blocker = null; }
   });
   session.on('state', state => {
     for (const wc of allContents.getAllWebContents()) {
