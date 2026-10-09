@@ -133,7 +133,7 @@ function setupCoop({ config, log, logDir, gameUrl, appDir = path.join(__dirname,
         const { patchGuestWasm } = await loadEsm();
         const p = patchGuestWasm(body);
         clog('wasm', `patches do convidado: ${p.applied.map(a => a.label).join(', ') || 'nenhum'}${p.errors.length ? ` — falhas: ${p.errors.join('; ')}` : ''}`);
-        if (!p.errors.length) body = p.buf;
+        if (!p.errors.length) body = Buffer.from(p.buf.buffer, p.buf.byteOffset, p.buf.byteLength);
         else if (layout) layout = { ...layout, ok: false, reason: `wasm do convidado sem patch: ${p.errors.join('; ')}` };
       }
       const headers = new Headers(original.headers);

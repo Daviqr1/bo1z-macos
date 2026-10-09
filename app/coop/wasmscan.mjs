@@ -12,6 +12,7 @@
 //
 // Também conta os produtores (`i32.atomic.rmw.add offset=BASE+SENDOFF`). Sem casamento único, devolve { ok: false }.
 import { checkLayout, DEFAULT_LAYOUT } from './layout.mjs';
+import { asBytes, bytes, includesBytes, indexOfBytes, utf8Bytes } from './bytes.mjs';
 
 const S = name => ({ leb: 's', name }); // LEB128 com sinal (i32.const)
 const U = name => ({ leb: 'u', name }); // LEB128 sem sinal (índice de local, offset de memarg)
@@ -68,7 +69,7 @@ function matchAt(buf, pos, pattern, i, caps) {
 
 function indexAll(buf, needle) {
   const out = [];
-  for (let i = buf.indexOf(needle); i >= 0; i = buf.indexOf(needle, i + 1)) out.push(i);
+  for (let i = indexOfBytes(buf, needle); i >= 0; i = indexOfBytes(buf, needle, i + 1)) out.push(i);
   return out;
 }
 
@@ -84,14 +85,14 @@ function uleb(n) {
 // lê serverAddress para só encaminhar o que o cliente manda ao host (e não ao servidor local da estratégia shadow).
 function findClientConnection(buf) {
   const found = new Set();
-  for (const at of indexAll(buf, Buffer.from([0x28, 0x02, 0x00, 0x20, 0x01, 0x41, 0x20, 0x6a, 0x24, 0x00, 0x0f]))) {
+  for (const at of indexAll(buf, bytes([0x28, 0x02, 0x00, 0x20, 0x01, 0x41, 0x20, 0x6a, 0x24, 0x00, 0x0f]))) {
     for (let start = at - 6; start <= at - 2; ++start) {
       if (buf[start] !== 0x41) continue;
       const r = readLeb(buf, start + 1, true);
       if (!r || r.pos !== at || r.value < 1024) continue;
-      const probe = Buffer.from([0x41, ...uleb(r.value), 0x28, 0x02, 0x00, 0x45, 0x04, 0x40]);
+      const probe = bytes([0x41, ...uleb(r.value), 0x28, 0x02, 0x00, 0x45, 0x04, 0x40]);
       const before = buf.subarray(Math.max(0, start - 120), start);
-      if (before.includes(probe)) found.add(r.value);
+      if (includesBytes(before, probe)) found.add(r.value);
     }
   }
   return found.size === 1 ? [...found][0] : null;
@@ -100,7 +101,7 @@ function findClientConnection(buf) {
 // Base do segmento .rodata: __wasm_init_memory faz "i32.const BASE; i32.const 0; i32.const SIZE; memory.init 0".
 function rodataBase(buf) {
   const hits = new Set();
-  for (const at of indexAll(buf, Buffer.from([0xfc, 0x08, 0x00, 0x00]))) {
+  for (const at of indexAll(buf, bytes([0xfc, 0x08, 0x00, 0x00]))) {
     // volta até 20 bytes procurando 41 BASE 41 00 41 SIZE imediatamente antes
     for (let start = at - 16; start < at - 4; ++start) {
       if (buf[start] !== 0x41) continue;
@@ -116,21 +117,21 @@ function rodataBase(buf) {
 // Global onde o motor guarda o ponteiro de um dvar: o registro é "i32.const GLOBAL; i32.const &nome; …;
 // call _Dvar_Register*; i32.store". Acha &nome no .rodata e o GLOBAL logo antes dele (tem de ser único).
 export function findDvarGlobals(input, names) {
-  const buf = Buffer.isBuffer(input) ? input : Buffer.from(input.buffer, input.byteOffset, input.byteLength);
+  const buf = asBytes(input);
   const out = Object.fromEntries(names.map(n => [n, null]));
   const base = rodataBase(buf);
   if (base === null) return out;
   // o .rodata é o primeiro segmento passivo; acha cada nome terminado em \0 (pode ser sufixo de outra string: o
   // linker funde "sv_running" no fim de "com_sv_running")
   for (const name of names) {
-    const needle = Buffer.from(name + '\0');
+    const needle = utf8Bytes(name + '\0');
     const found = new Set();
-    for (let i = buf.indexOf(needle); i >= 0; i = buf.indexOf(needle, i + 1)) found.add(i);
+    for (let i = indexOfBytes(buf, needle); i >= 0; i = indexOfBytes(buf, needle, i + 1)) found.add(i);
     const globals = new Set();
     for (const fileOff of found) {
       // offset no arquivo -> endereço: precisa do início do segmento no arquivo; acha pelo par (BASE, conteúdo)
       const addr = base + (fileOff - rodataFileStart(buf));
-      for (const at of indexAll(buf, Buffer.from([0x41, ...sleb(addr)]))) {
+      for (const at of indexAll(buf, bytes([0x41, ...sleb(addr)]))) {
         for (let back = 2; back <= 6; ++back) {
           if (buf[at - back] !== 0x41) continue;
           const g = readLeb(buf, at - back + 1, true);
@@ -170,12 +171,12 @@ function rodataFileStart(buf) {
   return result;
 }
 
-// bytes: Uint8Array/Buffer do .wasm inteiro.
-export function scanWasm(bytes) {
-  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+// input: bytes do .wasm inteiro (Uint8Array, ArrayBuffer ou o Buffer do Node).
+export function scanWasm(input) {
+  const buf = asBytes(input);
   // Pré-filtro barato: "local.get 0; i32.const <qualquer>; i32.mul; local.tee" e depois o casamento completo.
   const hits = [];
-  for (const at of indexAll(buf, Buffer.from([0x6c, 0x22]))) {
+  for (const at of indexAll(buf, bytes([0x6c, 0x22]))) {
     for (let start = at - 7; start <= at - 3; ++start) {
       if (start < 0 || buf[start] !== 0x20 || buf[start + 1] !== 0x00 || buf[start + 2] !== 0x41) continue;
       const caps = matchAt(buf, start, GET_LOOP_PACKET, 0, {});
@@ -193,7 +194,7 @@ export function scanWasm(bytes) {
     return { ok: false, reason: 'endereços absolutos de get/send não batem com base+offset' };
   try { checkLayout(layout); } catch (error) { return { ok: false, reason: error.message }; }
   // Produtores: i32.atomic.rmw.add (0xfe 0x1e) align=2 offset=BASE+SENDOFF.
-  const producers = indexAll(buf, Buffer.from([0xfe, 0x1e, 0x02, ...uleb(c.sendAbs)])).length;
+  const producers = indexAll(buf, bytes([0xfe, 0x1e, 0x02, ...uleb(c.sendAbs)])).length;
   if (!producers) return { ok: false, reason: 'nenhum produtor (atomic.rmw.add em send) encontrado' };
   layout.clientConnPtr = findClientConnection(buf); // null: convidado sem "armar" pelo serverAddress (ver page.mjs)
   layout.serverAddressOff = 16;

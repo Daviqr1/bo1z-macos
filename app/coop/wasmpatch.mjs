@@ -12,12 +12,14 @@
 // recompilação enquanto as funções existirem; qualquer coisa fora do esperado (0 ou 2+ ocorrências, LEB de tamanho
 // diferente) => sem patch e o motivo no log.
 
+import { bytes, indexOfBytes, utf8 } from './bytes.mjs';
+
 function reader(buf, pos = 0) {
   return {
     get pos() { return pos; }, set pos(v) { pos = v; },
     byte: () => buf[pos++],
     u32() { let r = 0, s = 0, b; do { b = buf[pos++]; r |= (b & 0x7f) << s; s += 7; } while (b & 0x80); return r >>> 0; },
-    str() { const n = this.u32(); const s = buf.subarray(pos, pos + n).toString('utf8'); pos += n; return s; },
+    str() { const n = this.u32(); const s = utf8(buf.subarray(pos, pos + n)); pos += n; return s; },
   };
 }
 
@@ -25,7 +27,7 @@ function uleb(n) { const out = []; do { let b = n & 0x7f; n >>>= 7; if (n) b |= 
 
 // { imports, names: Map(nome -> índice), body(índice) -> { start, end } }
 export function parseWasm(buf) {
-  if (buf.readUInt32LE(0) !== 0x6d736100) throw new Error('não é wasm');
+  if (buf.length < 8 || buf[0] !== 0x00 || buf[1] !== 0x61 || buf[2] !== 0x73 || buf[3] !== 0x6d) throw new Error('não é wasm');
   const r = reader(buf, 8);
   let imports = 0, code = null;
   const names = new Map();
@@ -80,7 +82,7 @@ function findName(names, prefix) {
 
 function indexAllIn(buf, needle, start, end) {
   const out = [];
-  for (let i = buf.indexOf(needle, start); i >= 0 && i < end; i = buf.indexOf(needle, i + 1)) out.push(i);
+  for (let i = indexOfBytes(buf, needle, start); i >= 0 && i < end; i = indexOfBytes(buf, needle, i + 1)) out.push(i);
   return out;
 }
 
@@ -89,18 +91,20 @@ function retargetCall(buf, wasm, label, inFn, from, to, tail) {
   const fn = wasm.body(findName(wasm.names, inFn));
   const a = uleb(findName(wasm.names, from)), b = uleb(findName(wasm.names, to));
   if (a.length !== b.length) throw new Error(`${label}: índices com LEB de tamanhos diferentes`);
-  const sites = indexAllIn(buf, Buffer.from([0x10, ...a, ...tail]), fn.start, fn.end);
+  const sites = indexAllIn(buf, bytes([0x10, ...a, ...tail]), fn.start, fn.end);
   if (sites.length !== 1) throw new Error(`${label}: ${sites.length} chamadas em ${inFn} (esperado 1)`);
   buf.set(b, sites[0] + 1);
   return { label, at: sites[0] };
 }
 
-// Devolve { buf (cópia patcheada), applied: [...], errors: [...] }. Nunca mexe no buffer de entrada.
+// Devolve { buf (cópia patcheada, Uint8Array), applied: [...], errors: [...] }. Nunca mexe no buffer de entrada.
 export function patchGuestWasm(input) {
-  const buf = Buffer.from(input);
+  const src = input instanceof Uint8Array ? input : new Uint8Array(input);
+  const buf = new Uint8Array(src.length);
+  buf.set(src);
   const applied = [], errors = [];
   let wasm;
-  try { wasm = parseWasm(buf); } catch (error) { return { buf: Buffer.from(input), applied, errors: [error.message] }; }
+  try { wasm = parseWasm(buf); } catch (error) { return { buf, applied, errors: [error.message] }; }
   const steps = [
     () => retargetCall(buf, wasm, 'G1', 'CL_PacketEvent', 'NET_CompareAdr', 'NET_CompareBaseAdr', [0x45, 0x04, 0x40]),
   ];

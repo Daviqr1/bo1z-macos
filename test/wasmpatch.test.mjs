@@ -9,7 +9,7 @@ test('entrada que não é wasm: nenhum patch, erro explicado, buffer intacto', (
   const r = patchGuestWasm(junk);
   assert.deepEqual(r.applied, []);
   assert.match(r.errors[0], /não é wasm/);
-  assert.equal(r.buf.toString(), 'nao sou wasm');
+  assert.equal(new TextDecoder().decode(r.buf), 'nao sou wasm');
 });
 
 const REAL = process.env.BO1Z_WASM;
