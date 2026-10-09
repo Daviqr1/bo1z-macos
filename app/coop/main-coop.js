@@ -28,9 +28,16 @@ const MODULES = new Set(['page.mjs', 'netbridge.mjs', 'ring.mjs', 'layout.mjs', 
 const GLUE = 'KisakBlack-web.mjs', WASM = 'KisakBlack-web.wasm';
 const LOBBY_CALLS = new Set(['getState', 'create', 'join', 'connectByAddress', 'leave', 'setMap', 'setReady', 'start', 'copyInvite']);
 
+// URL do servidor de convite embutida no app (scripts/set-signal.sh grava depois do deploy do signal/): assim o app do
+// convidado já sai sabendo para onde ir. config.json e BO1Z_SIGNAL têm prioridade.
+function builtinSignal() {
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'defaults.json'), 'utf8')).signal || ''; } catch { return ''; }
+}
+
 function coopSettings(config, env = process.env) {
   const c = { role: 'off', port: 27960, bind: '0.0.0.0', host: '', code: '', name: '', maxGuests: 3, guestStart: 'shadow',
-    signal: '', ...(config.coop ?? {}) };
+    ...(config.coop ?? {}) };
+  c.signal = c.signal || builtinSignal();
   if (env.BO1Z_COOP) c.role = env.BO1Z_COOP;
   if (env.BO1Z_COOP_HOST) c.host = env.BO1Z_COOP_HOST;
   if (env.BO1Z_COOP_PORT) c.port = Number(env.BO1Z_COOP_PORT);

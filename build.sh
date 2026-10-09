@@ -15,6 +15,11 @@ P="$OUT/Contents/Info.plist"
 $PB -c "Set :CFBundleName BO1 Zombies" -c "Set :CFBundleDisplayName BO1 Zombies" \
     -c "Set :CFBundleIdentifier com.davi.bo1zombies" "$P"
 $PB -c "Add :LSApplicationCategoryType string public.app-category.games" "$P" 2>/dev/null || true
+# links de convite bo1z://join/<código> abrem o app (o main trata em open-url)
+$PB -c "Delete :CFBundleURLTypes" "$P" 2>/dev/null || true
+$PB -c "Add :CFBundleURLTypes array" -c "Add :CFBundleURLTypes:0 dict" \
+    -c "Add :CFBundleURLTypes:0:CFBundleURLName string com.davi.bo1zombies.invite" \
+    -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string bo1z" "$P"
 codesign --force --deep -s - "$OUT" 2>&1 | grep -v "replacing existing signature" || true
 touch "$OUT"
 echo "ok: $OUT"
